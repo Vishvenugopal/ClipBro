@@ -62,6 +62,14 @@ function createMainWindow() {
     }
   });
 
+  // Log any renderer crashes
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('Renderer process gone:', details);
+  });
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('Failed to load:', errorCode, errorDescription);
+  });
+
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -133,7 +141,6 @@ function showMainWindow(section) {
 }
 
 async function takeScreenshot() {
-  const ScreenshotCapture = require('./screenshot-capture');
   const capture = new ScreenshotCapture(mainWindow, db, CLIPS_DIR);
   await capture.captureFullScreen();
 }
@@ -156,9 +163,13 @@ function registerShortcuts() {
     await capture.captureWithSelection();
   });
 
-  // Ctrl+Shift+V - show app
+  // Ctrl+Shift+V - toggle app visibility
   globalShortcut.register('CommandOrControl+Shift+V', () => {
-    showMainWindow();
+    if (mainWindow && mainWindow.isVisible() && mainWindow.isFocused()) {
+      mainWindow.hide();
+    } else {
+      showMainWindow();
+    }
   });
 }
 
@@ -238,6 +249,18 @@ function setupIPC() {
     return db.moveToHidden(clipId);
   });
 
+  // Take screenshot from renderer
+  ipcMain.handle('take-screenshot', async () => {
+    await takeScreenshot();
+    return true;
+  });
+
+  ipcMain.handle('take-screenshot-selection', async () => {
+    const capture = new ScreenshotCapture(mainWindow, db, CLIPS_DIR);
+    await capture.captureWithSelection();
+    return true;
+  });
+
   // Screenshot editing
   ipcMain.handle('save-edited-clip', async (_, clipId, imageDataUrl) => {
     const buffer = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
@@ -251,7 +274,7 @@ function setupIPC() {
   ipcMain.handle('generate-qr', async (_, clipId) => {
     const url = await shareServer.createTemporaryLink(clipId);
     const QRCode = require('qrcode');
-    const qrDataUrl = await QRCode.toDataURL(url, { width: 300, margin: 2, color: { dark: '#ffffff', light: '#00000000' } });
+    const qrDataUrl = await QRCode.toDataURL(url, { width: 300, margin: 2, color: { dark: '#000000', light: '#ffffff' } });
     return { url, qrDataUrl };
   });
 
@@ -285,9 +308,21 @@ function setupIPC() {
     const clip = db.getClip(clipId);
     if (!clip || clip.type !== 'image') return null;
     const Tesseract = require('tesseract.js');
-    const { data: { text } } = await Tesseract.recognize(clip.filePath, 'eng');
-    db.updateClip(clipId, { extractedText: text });
-    return text;
+    try {
+      const worker = await Tesseract.createWorker('eng');
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+        preserve_interword_spaces: '1',
+      });
+      const { data: { text } } = await worker.recognize(clip.filePath);
+      await worker.terminate();
+      const cleaned = text.trim();
+      if (cleaned) db.updateClip(clipId, { extractedText: cleaned });
+      return cleaned || null;
+    } catch (e) {
+      console.error('OCR error:', e);
+      return null;
+    }
   });
 
   // QR code detection from image
@@ -364,7 +399,48 @@ function setupIPC() {
   });
 
   ipcMain.handle('save-settings', async (_, settings) => {
-    return db.saveSettings(settings);
+    db.saveSettings(settings);
+
+    // Apply startup setting
+    if (settings.openOnStartup !== undefined) {
+      app.setLoginItemSettings({ openAtLogin: settings.openOnStartup === 'true' });
+    }
+
+    // Apply notification setting to clipboard monitor
+    if (clipboardMonitor) {
+      clipboardMonitor.showNotification = settings.clipboardNotification !== 'false';
+    }
+
+    return true;
+  });
+
+  // Choose directory
+  ipcMain.handle('choose-directory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory']
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      return result.filePaths[0];
+    }
+    return null;
+  });
+
+  // Clear all clips (move to recycle bin)
+  ipcMain.handle('clear-all-clips', async () => {
+    try {
+      const { shell } = require('electron');
+      const clips = db.getClips();
+      for (const clip of clips) {
+        if (clip.filePath && fs.existsSync(clip.filePath)) {
+          await shell.trashItem(clip.filePath);
+        }
+        db.deleteClip(clip.id);
+      }
+      return true;
+    } catch (e) {
+      console.error('Clear all clips error:', e);
+      return false;
+    }
   });
 
   // Open external
@@ -383,33 +459,70 @@ function setupIPC() {
     }
   });
 
-  // Groups / Tags
-  ipcMain.handle('get-groups', async () => {
-    return db.getGroups();
+  // File explorer - list directory contents
+  ipcMain.handle('list-directory', async (_, dirPath) => {
+    try {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const results = [];
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        try {
+          const stat = fs.statSync(fullPath);
+          results.push({
+            name: entry.name,
+            path: fullPath,
+            isDirectory: entry.isDirectory(),
+            size: stat.size,
+            modifiedAt: stat.mtimeMs,
+            extension: entry.isDirectory() ? '' : path.extname(entry.name).toLowerCase()
+          });
+        } catch { /* skip inaccessible */ }
+      }
+      return results.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    } catch (e) {
+      console.error('list-directory error:', e.message);
+      return [];
+    }
   });
 
-  ipcMain.handle('auto-group-clips', async () => {
-    return db.autoGroupClips();
+  // Get app's default folder path
+  ipcMain.handle('get-app-folder', async () => {
+    const appFolder = path.join(DATA_DIR, 'UserFolders');
+    const defaultFolder = path.join(appFolder, 'My Folder');
+    if (!fs.existsSync(appFolder)) fs.mkdirSync(appFolder, { recursive: true });
+    if (!fs.existsSync(defaultFolder)) fs.mkdirSync(defaultFolder, { recursive: true });
+    return appFolder;
   });
 
-  // Search
-  ipcMain.handle('search-clips', async (_, query) => {
-    return db.searchClips(query);
+  // Get quick-access paths (like Windows explorer sidebar)
+  ipcMain.handle('get-quick-access-paths', async () => {
+    return {
+      home: app.getPath('home'),
+      desktop: app.getPath('desktop'),
+      documents: app.getPath('documents'),
+      downloads: app.getPath('downloads'),
+      pictures: app.getPath('pictures'),
+      appFolder: path.join(DATA_DIR, 'UserFolders'),
+      clipsFolder: CLIPS_DIR
+    };
   });
 
-  // Highlight to search
-  ipcMain.handle('highlight-search', async (_, text) => {
-    const url = `https://www.google.com/search?q=${encodeURIComponent(text)}`;
-    shell.openExternal(url);
+  // Open path in real Windows explorer
+  ipcMain.handle('open-in-explorer', async (_, filePath) => {
+    shell.showItemInFolder(filePath);
     return true;
   });
 
-  ipcMain.handle('highlight-search-image', async (_, imageDataUrl) => {
-    // Save temp file and open Google Lens
-    const buffer = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const tempPath = path.join(DATA_DIR, 'temp_search.png');
-    fs.writeFileSync(tempPath, buffer);
-    shell.openExternal('https://lens.google.com');
+  // Copy clip file into a filesystem folder
+  ipcMain.handle('copy-clip-to-path', async (_, clipId, destDir) => {
+    const clip = db.getClip(clipId);
+    if (!clip || !clip.filePath || !fs.existsSync(clip.filePath)) return false;
+    const ext = path.extname(clip.filePath);
+    const destFile = path.join(destDir, `${clip.title || clip.id}${ext}`);
+    fs.copyFileSync(clip.filePath, destFile);
     return true;
   });
 }
@@ -432,11 +545,13 @@ app.whenReady().then(async () => {
   // Initialize AI engine
   aiEngine = new AIEngine(db, CLIPS_DIR, DATA_DIR);
 
+  // Setup IPC BEFORE creating window so handlers are ready when renderer loads
+  setupIPC();
+
   // Create window and tray
   createMainWindow();
   createTray();
   registerShortcuts();
-  setupIPC();
 
   // Start clipboard monitoring
   clipboardMonitor = new ClipboardMonitor(db, CLIPS_DIR, mainWindow);

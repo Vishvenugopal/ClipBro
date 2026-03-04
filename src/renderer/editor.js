@@ -8,6 +8,7 @@ const Editor = {
   tool: 'select',
   color: '#ff3b30',
   lineWidth: 3,
+  opacity: 1,
   isDrawing: false,
   drawHistory: [],
   historyIndex: -1,
@@ -19,6 +20,7 @@ const Editor = {
   cropMode: false,
   cropRect: null,
   textOverlay: null,
+  _historyImageCache: null,
 
   init() {
     this.canvas = document.getElementById('editorCanvas');
@@ -44,6 +46,13 @@ const Editor = {
     document.getElementById('toolSize').addEventListener('input', (e) => {
       this.lineWidth = parseInt(e.target.value);
     });
+
+    const opacitySlider = document.getElementById('toolOpacity');
+    if (opacitySlider) {
+      opacitySlider.addEventListener('input', (e) => {
+        this.opacity = parseInt(e.target.value) / 100;
+      });
+    }
   },
 
   bindCanvas() {
@@ -176,11 +185,12 @@ const Editor = {
       this.ctx.lineWidth = this.lineWidth * 4;
       this.ctx.lineCap = 'round';
       this.ctx.lineJoin = 'round';
-      this.ctx.globalAlpha = 0.3;
-      this.ctx.globalCompositeOperation = 'source-over';
+      this.ctx.globalAlpha = Math.min(this.opacity, 0.4);
+      this.ctx.globalCompositeOperation = 'multiply';
       this.ctx.lineTo(pos.x, pos.y);
       this.ctx.stroke();
       this.ctx.globalAlpha = 1;
+      this.ctx.globalCompositeOperation = 'source-over';
     } else if (this.tool === 'eraser') {
       this.ctx.globalCompositeOperation = 'destination-out';
       this.ctx.lineWidth = this.lineWidth * 3;
@@ -189,8 +199,8 @@ const Editor = {
       this.ctx.stroke();
       this.ctx.globalCompositeOperation = 'source-over';
     } else if (this.tool === 'arrow' || this.tool === 'rectangle' || this.tool === 'blur') {
-      // Preview: redraw from history then draw shape
-      this.restoreFromHistory();
+      // Preview: redraw from history cache then draw shape
+      this.restoreFromHistorySync();
       this.drawShape(this.startX, this.startY, pos.x, pos.y);
     }
   },
@@ -207,7 +217,7 @@ const Editor = {
     const pos = this.getCanvasCoords(e);
 
     if (this.tool === 'arrow' || this.tool === 'rectangle' || this.tool === 'blur') {
-      this.restoreFromHistory();
+      this.restoreFromHistorySync();
       this.drawShape(this.startX, this.startY, pos.x, pos.y);
     }
 
@@ -243,23 +253,36 @@ const Editor = {
       this.ctx.beginPath();
       this.ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     } else if (this.tool === 'blur') {
-      // Pixelate region
-      const rx = Math.min(x1, x2);
-      const ry = Math.min(y1, y2);
-      const rw = Math.abs(x2 - x1);
-      const rh = Math.abs(y2 - y1);
-      if (rw > 0 && rh > 0) {
-        const pixelSize = 10;
+      // Pixelate region - clamp to canvas bounds
+      let rx = Math.max(0, Math.floor(Math.min(x1, x2)));
+      let ry = Math.max(0, Math.floor(Math.min(y1, y2)));
+      let rw = Math.floor(Math.abs(x2 - x1));
+      let rh = Math.floor(Math.abs(y2 - y1));
+      // Clamp to canvas dimensions
+      if (rx + rw > this.canvas.width) rw = this.canvas.width - rx;
+      if (ry + rh > this.canvas.height) rh = this.canvas.height - ry;
+      if (rw > 2 && rh > 2) {
+        const pixelSize = Math.max(6, Math.floor(Math.min(rw, rh) / 12));
         const imageData = this.ctx.getImageData(rx, ry, rw, rh);
         const data = imageData.data;
         for (let py = 0; py < rh; py += pixelSize) {
           for (let px = 0; px < rw; px += pixelSize) {
-            const i = (py * rw + px) * 4;
-            const r = data[i], g = data[i+1], b = data[i+2];
+            // Average the block instead of using single pixel
+            let totalR = 0, totalG = 0, totalB = 0, count = 0;
+            for (let dy = 0; dy < pixelSize && py+dy < rh; dy++) {
+              for (let dx = 0; dx < pixelSize && px+dx < rw; dx++) {
+                const i = ((py+dy) * rw + (px+dx)) * 4;
+                totalR += data[i]; totalG += data[i+1]; totalB += data[i+2];
+                count++;
+              }
+            }
+            const avgR = Math.round(totalR / count);
+            const avgG = Math.round(totalG / count);
+            const avgB = Math.round(totalB / count);
             for (let dy = 0; dy < pixelSize && py+dy < rh; dy++) {
               for (let dx = 0; dx < pixelSize && px+dx < rw; dx++) {
                 const j = ((py+dy) * rw + (px+dx)) * 4;
-                data[j] = r; data[j+1] = g; data[j+2] = b;
+                data[j] = avgR; data[j+1] = avgG; data[j+2] = avgB;
               }
             }
           }
@@ -275,10 +298,20 @@ const Editor = {
     const wrapper = this.canvas.parentElement;
     const rect = this.canvas.getBoundingClientRect();
 
+    // Clamp text placement to within canvas bounds
+    canvasX = Math.max(0, Math.min(this.canvas.width - 10, canvasX));
+    canvasY = Math.max(0, Math.min(this.canvas.height - 10, canvasY));
+
+    // Clamp overlay position within canvas visual bounds
+    let overlayLeft = screenX - rect.left + wrapper.offsetLeft;
+    let overlayTop = screenY - rect.top + wrapper.offsetTop;
+    overlayLeft = Math.max(0, Math.min(rect.width - 40, overlayLeft));
+    overlayTop = Math.max(0, Math.min(rect.height - 20, overlayTop));
+
     const div = document.createElement('div');
     div.className = 'text-input-overlay';
-    div.style.left = (screenX - rect.left + wrapper.offsetLeft) + 'px';
-    div.style.top = (screenY - rect.top + wrapper.offsetTop) + 'px';
+    div.style.left = overlayLeft + 'px';
+    div.style.top = overlayTop + 'px';
 
     const textarea = document.createElement('textarea');
     textarea.style.color = this.color;
@@ -295,9 +328,14 @@ const Editor = {
         e.preventDefault();
         const text = textarea.value.trim();
         if (text) {
-          this.ctx.font = `${this.lineWidth * 5}px sans-serif`;
+          const fontSize = this.lineWidth * 5;
+          this.ctx.font = `${fontSize}px sans-serif`;
           this.ctx.fillStyle = this.color;
-          this.ctx.fillText(text, canvasX, canvasY + this.lineWidth * 5);
+          // Clamp so text doesn't go outside canvas
+          const metrics = this.ctx.measureText(text);
+          const drawX = Math.min(canvasX, this.canvas.width - metrics.width);
+          const drawY = Math.max(fontSize, Math.min(canvasY + fontSize, this.canvas.height));
+          this.ctx.fillText(text, Math.max(0, drawX), drawY);
           this.saveToHistory();
         }
         this.removeTextInput();
@@ -353,14 +391,30 @@ const Editor = {
     this.ctx.setLineDash([]);
     this.ctx.strokeRect(x, y, w, h);
 
-    // Corner handles
-    const hs = 8;
-    this.ctx.fillStyle = '#4cd964';
-    [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(([cx, cy]) => {
-      this.ctx.beginPath();
-      this.ctx.arc(cx, cy, hs, 0, Math.PI * 2);
-      this.ctx.fill();
-    });
+    // iPhone-style corner brackets
+    const hs = 20;
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 4;
+    this.ctx.lineCap = 'round';
+    // top-left
+    this.ctx.beginPath(); this.ctx.moveTo(x, y + hs); this.ctx.lineTo(x, y); this.ctx.lineTo(x + hs, y); this.ctx.stroke();
+    // top-right
+    this.ctx.beginPath(); this.ctx.moveTo(x + w - hs, y); this.ctx.lineTo(x + w, y); this.ctx.lineTo(x + w, y + hs); this.ctx.stroke();
+    // bottom-left
+    this.ctx.beginPath(); this.ctx.moveTo(x, y + h - hs); this.ctx.lineTo(x, y + h); this.ctx.lineTo(x + hs, y + h); this.ctx.stroke();
+    // bottom-right
+    this.ctx.beginPath(); this.ctx.moveTo(x + w - hs, y + h); this.ctx.lineTo(x + w, y + h); this.ctx.lineTo(x + w, y + h - hs); this.ctx.stroke();
+    // Edge midpoint handles (small bars)
+    this.ctx.lineWidth = 3;
+    const mw = 16;
+    // top
+    this.ctx.beginPath(); this.ctx.moveTo(x + w/2 - mw, y); this.ctx.lineTo(x + w/2 + mw, y); this.ctx.stroke();
+    // bottom
+    this.ctx.beginPath(); this.ctx.moveTo(x + w/2 - mw, y + h); this.ctx.lineTo(x + w/2 + mw, y + h); this.ctx.stroke();
+    // left
+    this.ctx.beginPath(); this.ctx.moveTo(x, y + h/2 - mw); this.ctx.lineTo(x, y + h/2 + mw); this.ctx.stroke();
+    // right
+    this.ctx.beginPath(); this.ctx.moveTo(x + w, y + h/2 - mw); this.ctx.lineTo(x + w, y + h/2 + mw); this.ctx.stroke();
 
     // Grid lines (rule of thirds)
     this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
@@ -400,25 +454,97 @@ const Editor = {
     this.canvas.parentElement.appendChild(bar);
   },
 
+  // Detect which part of the crop rect the user is clicking
+  _getCropHandle(pos) {
+    const { x, y, w, h } = this.cropRect;
+    const grip = 18; // pixel tolerance for grabbing handles
+    const corners = [
+      { name: 'tl', cx: x, cy: y },
+      { name: 'tr', cx: x + w, cy: y },
+      { name: 'bl', cx: x, cy: y + h },
+      { name: 'br', cx: x + w, cy: y + h }
+    ];
+    for (const c of corners) {
+      if (Math.abs(pos.x - c.cx) < grip && Math.abs(pos.y - c.cy) < grip) return c.name;
+    }
+    // Edges
+    if (Math.abs(pos.y - y) < grip && pos.x > x && pos.x < x + w) return 'top';
+    if (Math.abs(pos.y - (y + h)) < grip && pos.x > x && pos.x < x + w) return 'bottom';
+    if (Math.abs(pos.x - x) < grip && pos.y > y && pos.y < y + h) return 'left';
+    if (Math.abs(pos.x - (x + w)) < grip && pos.y > y && pos.y < y + h) return 'right';
+    // Inside = move
+    if (pos.x > x && pos.x < x + w && pos.y > y && pos.y < y + h) return 'move';
+    return null;
+  },
+
   cropStartDrag(e) {
-    this.cropDragging = true;
     const pos = this.getCanvasCoords(e);
+    this.cropHandle = this._getCropHandle(pos);
+    if (!this.cropHandle) return;
+    this.cropDragging = true;
     this.cropDragStart = { x: pos.x, y: pos.y };
     this.cropRectStart = { ...this.cropRect };
   },
 
   cropDragMove(e) {
-    if (!this.cropDragging) return;
+    if (!this.cropDragging || !this.cropHandle) return;
     const pos = this.getCanvasCoords(e);
     const dx = pos.x - this.cropDragStart.x;
     const dy = pos.y - this.cropDragStart.y;
-    this.cropRect.x = Math.max(0, Math.min(this.canvas.width - this.cropRect.w, this.cropRectStart.x + dx));
-    this.cropRect.y = Math.max(0, Math.min(this.canvas.height - this.cropRect.h, this.cropRectStart.y + dy));
+    const s = this.cropRectStart;
+    const cw = this.canvas.width, ch = this.canvas.height;
+    const minSize = 20;
+
+    let { x, y, w, h } = { ...s };
+
+    switch (this.cropHandle) {
+      case 'move':
+        x = Math.max(0, Math.min(cw - w, s.x + dx));
+        y = Math.max(0, Math.min(ch - h, s.y + dy));
+        break;
+      case 'tl':
+        x = Math.max(0, Math.min(s.x + s.w - minSize, s.x + dx));
+        y = Math.max(0, Math.min(s.y + s.h - minSize, s.y + dy));
+        w = s.x + s.w - x;
+        h = s.y + s.h - y;
+        break;
+      case 'tr':
+        w = Math.max(minSize, Math.min(cw - s.x, s.w + dx));
+        y = Math.max(0, Math.min(s.y + s.h - minSize, s.y + dy));
+        h = s.y + s.h - y;
+        break;
+      case 'bl':
+        x = Math.max(0, Math.min(s.x + s.w - minSize, s.x + dx));
+        w = s.x + s.w - x;
+        h = Math.max(minSize, Math.min(ch - s.y, s.h + dy));
+        break;
+      case 'br':
+        w = Math.max(minSize, Math.min(cw - s.x, s.w + dx));
+        h = Math.max(minSize, Math.min(ch - s.y, s.h + dy));
+        break;
+      case 'top':
+        y = Math.max(0, Math.min(s.y + s.h - minSize, s.y + dy));
+        h = s.y + s.h - y;
+        break;
+      case 'bottom':
+        h = Math.max(minSize, Math.min(ch - s.y, s.h + dy));
+        break;
+      case 'left':
+        x = Math.max(0, Math.min(s.x + s.w - minSize, s.x + dx));
+        w = s.x + s.w - x;
+        break;
+      case 'right':
+        w = Math.max(minSize, Math.min(cw - s.x, s.w + dx));
+        break;
+    }
+
+    this.cropRect = { x, y, w, h };
     this.drawCropOverlay();
   },
 
   cropDragEnd() {
     this.cropDragging = false;
+    this.cropHandle = null;
   },
 
   applyCrop() {
@@ -451,6 +577,22 @@ const Editor = {
     if (this.drawHistory.length > 50) {
       this.drawHistory.shift();
       this.historyIndex--;
+    }
+    // Cache image for sync restore
+    this._updateHistoryCache();
+  },
+
+  _updateHistoryCache() {
+    if (this.historyIndex < 0) { this._historyImageCache = null; return; }
+    const img = new Image();
+    img.onload = () => { this._historyImageCache = img; };
+    img.src = this.drawHistory[this.historyIndex];
+  },
+
+  restoreFromHistorySync() {
+    if (this._historyImageCache) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      this.ctx.drawImage(this._historyImageCache, 0, 0);
     }
   },
 
@@ -504,7 +646,19 @@ const Editor = {
   async saveEdits() {
     if (!this.currentClip) return;
     const dataUrl = this.canvas.toDataURL('image/png');
-    await ucb.saveEditedClip(this.currentClip.id, dataUrl);
+    const newPath = await ucb.saveEditedClip(this.currentClip.id, dataUrl);
+    if (newPath) {
+      // Append cache-bust param so thumbnails reload the updated image
+      const bustPath = newPath + '?t=' + Date.now();
+      this.currentClip.filePath = bustPath;
+      const clipInAll = App.allClips.find(c => c.id === this.currentClip.id);
+      if (clipInAll) clipInAll.filePath = bustPath;
+      const clipInView = App.clips.find(c => c.id === this.currentClip.id);
+      if (clipInView) clipInView.filePath = bustPath;
+      App.renderClipGrid();
+      App.renderLeftSidebar();
+      App.renderPinnedFolders();
+    }
     App.toast('Edits saved', 'success');
   }
 };

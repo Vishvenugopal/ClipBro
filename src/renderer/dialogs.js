@@ -35,7 +35,8 @@ const Dialogs = {
 
   // ===== New Folder =====
   showNewFolderDialog() {
-    const colors = ['#ff3b30','#ff9500','#ffcc00','#4cd964','#5ac8fa','#af52de','#ff2d55'];
+    const colors = ['#4cd964','#ff3b30','#ff9500','#ffcc00','#5ac8fa','#af52de','#ff2d55'];
+    const defaultPath = App.explorerHomePath || '';
     this.show(`
       <div class="modal-header">
         <h2>New Folder</h2>
@@ -46,15 +47,23 @@ const Dialogs = {
         <input type="text" class="form-input" id="newFolderName" placeholder="Folder name" autofocus />
       </div>
       <div class="form-group">
+        <label class="form-label">Path</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" class="form-input" id="newFolderPath" value="${defaultPath}" style="flex:1;font-size:11px" />
+          <button class="btn btn-secondary" id="browseFolderPathBtn" style="font-size:10px;padding:5px 8px">Browse</button>
+        </div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:2px">Filesystem directory for this folder</div>
+      </div>
+      <div class="form-group">
         <label class="form-label">Color</label>
         <div style="display:flex;gap:8px;margin-top:4px">
           ${colors.map((c, i) => `<button class="color-option" data-color="${c}" style="width:28px;height:28px;border-radius:50%;border:2px solid ${i === 0 ? '#fff' : 'transparent'};background:${c};cursor:pointer" onclick="this.parentElement.querySelectorAll('.color-option').forEach(b=>b.style.borderColor='transparent');this.style.borderColor='#fff';document.getElementById('selectedFolderColor').value='${c}'"></button>`).join('')}
         </div>
-        <input type="hidden" id="selectedFolderColor" value="#ff3b30" />
+        <input type="hidden" id="selectedFolderColor" value="#4cd964" />
       </div>
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-secondary)">
-          <input type="checkbox" id="newFolderPinned" checked /> Pin to sidebar
+          <input type="checkbox" id="newFolderPinned" checked /> Pin to top bar
         </label>
       </div>
       <div class="btn-row">
@@ -63,14 +72,21 @@ const Dialogs = {
       </div>
     `);
 
+    document.getElementById('browseFolderPathBtn').addEventListener('click', async () => {
+      const d = await ucb.chooseDirectory();
+      if (d) document.getElementById('newFolderPath').value = d;
+    });
+
     document.getElementById('createFolderBtn').addEventListener('click', async () => {
       const name = document.getElementById('newFolderName').value.trim();
       if (!name) return;
       const color = document.getElementById('selectedFolderColor').value;
       const pinned = document.getElementById('newFolderPinned').checked;
-      await ucb.createFolder({ name, color, pinned });
+      const folderPath = document.getElementById('newFolderPath').value.trim();
+      await ucb.createFolder({ name, color, pinned, path: folderPath || null });
       App.folders = await ucb.getFolders();
-      App.renderFolders();
+      App.renderPinnedFolders();
+      App.renderQuickAccess();
       this.close();
       App.toast('Folder created', 'success');
     });
@@ -351,20 +367,32 @@ const Dialogs = {
   // ===== AI Dialog =====
   showAIDialog(clip) {
     if (!clip) { App.toast('Select a clip first', 'info'); return; }
-    if (clip.type !== 'image') { App.toast('AI analysis works on image clips', 'info'); return; }
+
+    const isImage = clip.type === 'image';
+    const defaultPrompt = isImage ? 'Describe this image in detail.' : 'Summarize this text.';
+    const previewHtml = isImage && clip.filePath
+      ? `<div style="margin-bottom:12px;text-align:center"><img src="file://${clip.filePath.replace(/\\/g, '/')}" style="max-height:120px;border-radius:8px;opacity:0.8" /></div>`
+      : clip.content ? `<div style="margin-bottom:12px;padding:8px;background:var(--bg-tertiary);border-radius:8px;font-size:11px;color:var(--text-secondary);max-height:80px;overflow:hidden;white-space:pre-wrap">${clip.content.substring(0, 300)}</div>` : '';
+
+    const quickBtns = isImage
+      ? `<button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='What text is in this image?'">Extract Text</button>
+         <button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='What objects or people are in this image?'">Identify Objects</button>`
+      : `<button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='Summarize this text.'">Summarize</button>
+         <button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='Fix grammar and spelling.'">Fix Grammar</button>
+         <button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='Translate this to English.'">Translate</button>`;
 
     this.show(`
       <div class="modal-header">
-        <h2>Ask AI About Image</h2>
+        <h2>Ask AI</h2>
         <button class="modal-close" onclick="Dialogs.close()">&times;</button>
       </div>
+      ${previewHtml}
       <div class="form-group">
         <label class="form-label">Question / Prompt</label>
-        <textarea class="form-textarea" id="aiPrompt" placeholder="Describe this image, extract text, identify objects..." rows="3">Describe this image in detail.</textarea>
+        <textarea class="form-textarea" id="aiPrompt" placeholder="Ask anything about this ${isImage ? 'image' : 'text'}..." rows="3">${defaultPrompt}</textarea>
       </div>
       <div class="btn-row" style="margin-bottom:12px">
-        <button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='What text is in this image?'">Extract Text</button>
-        <button class="btn btn-secondary" onclick="document.getElementById('aiPrompt').value='What objects or people are in this image?'">Identify Objects</button>
+        ${quickBtns}
         <button class="btn btn-primary" id="aiAnalyzeBtn">Analyze</button>
       </div>
       <div id="aiResultArea"></div>
@@ -374,9 +402,11 @@ const Dialogs = {
       const prompt = document.getElementById('aiPrompt').value.trim();
       if (!prompt) return;
 
-      document.getElementById('aiResultArea').innerHTML = '<div class="ai-loading"><div class="spinner"></div> Analyzing image...</div>';
+      document.getElementById('aiResultArea').innerHTML = '<div class="ai-loading"><div class="spinner"></div> Analyzing...</div>';
 
-      const result = await ucb.aiAnalyzeImage(clip.id, prompt);
+      const result = isImage
+        ? await ucb.aiAnalyzeImage(clip.id, prompt)
+        : await ucb.aiAnalyzeImage(clip.id, prompt);
 
       if (result.error) {
         document.getElementById('aiResultArea').innerHTML = `<div class="ai-response" style="border-color:var(--accent-red)">${result.error}</div>`;
@@ -393,16 +423,29 @@ const Dialogs = {
         <h2>${title}</h2>
         <button class="modal-close" onclick="Dialogs.close()">&times;</button>
       </div>
-      <div class="ai-response" style="margin-bottom:16px">${text.replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>
+      <div class="ai-response" style="margin-bottom:16px;user-select:text;cursor:text;-webkit-user-select:text" id="textResultContent">${text.replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>
+      <p style="font-size:10px;color:var(--text-muted);margin-bottom:12px">Select text above to copy a portion, or use the button to copy all.</p>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="Dialogs.close()">Close</button>
-        <button class="btn btn-primary" id="copyTextResultBtn">Copy Text</button>
+        <button class="btn btn-secondary" id="copySelectionBtn">Copy Selection</button>
+        <button class="btn btn-primary" id="copyTextResultBtn">Copy All</button>
       </div>
     `);
 
     document.getElementById('copyTextResultBtn').addEventListener('click', () => {
+      App._ignoreClipboard = true;
       navigator.clipboard.writeText(text);
       App.toast('Text copied to clipboard', 'success');
+      setTimeout(() => { App._ignoreClipboard = false; }, 2000);
+    });
+
+    document.getElementById('copySelectionBtn').addEventListener('click', () => {
+      const selection = window.getSelection().toString();
+      if (!selection) { App.toast('Select some text first', 'info'); return; }
+      App._ignoreClipboard = true;
+      navigator.clipboard.writeText(selection);
+      App.toast('Selection copied', 'success');
+      setTimeout(() => { App._ignoreClipboard = false; }, 2000);
     });
   }
 };

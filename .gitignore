@@ -5,3 +5,8 @@ dist/
 Thumbs.db
 *.db
 *.traineddata
+*.exe
+*.blockmap
+*.yml
+!package.json
+.env

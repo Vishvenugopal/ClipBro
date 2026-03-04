@@ -1,4 +1,4 @@
-const { clipboard, nativeImage } = require('electron');
+const { clipboard, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -12,6 +12,7 @@ class ClipboardMonitor {
     this.lastText = '';
     this.lastImageHash = '';
     this.monitoring = true;
+    this.showNotification = true; // default on, controlled by settings
   }
 
   start() {
@@ -131,6 +132,16 @@ class ClipboardMonitor {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('new-clip', clip);
       this.mainWindow.webContents.send('clipboard-update', clip);
+    }
+
+    // Windows desktop notification
+    if (this.showNotification && Notification.isSupported()) {
+      const notif = new Notification({
+        title: 'Universal Clipboard',
+        body: clip.type === 'image' ? `Image captured (${clip.title})` : `Clip captured: ${(clip.title || '').substring(0, 60)}`,
+        silent: true
+      });
+      notif.show();
     }
 
     // Auto-group

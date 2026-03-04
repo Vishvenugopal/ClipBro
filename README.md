@@ -1,59 +1,48 @@
 # Universal Clipboard
 
-A powerful screenshot & clipboard manager for Windows inspired by iPhone's screenshot workflow, built as an Electron desktop app. Automatically detects screenshots/copied text and imports them into the app. Easily share screenshots/copied text to your phone with QR codes.
+A screenshot & clipboard manager for Windows, built with Electron. Automatically captures copied text, images, and links. Edit images, organize clips into folders, and share via QR codes or temporary links.
 
 ## Features
 
-### Screenshot & Capture
-- **Full-screen screenshot** via `PrintScreen`
-- **Selection screenshot** via `Ctrl+Shift+S`
-- **Clipboard monitoring** — automatically captures copied text, images, links
+### Capture
+- **Full-screen screenshot** — `PrintScreen`
+- **Selection screenshot** — `Ctrl+Shift+S`
+- **Clipboard monitoring** — auto-captures copied text, images, links
 - **Import files** — drag-and-drop or file picker
-- **Paste into app** via `Ctrl+V`
 
-### Image Editing (Photoshop-lite)
-- **Draw/Pen** — freehand drawing with adjustable color and size
+### Image Editing
+- **Draw/Pen** — freehand drawing with color & size controls
 - **Highlighter** — semi-transparent marker
-- **Arrow** — draw arrows for annotations
-- **Rectangle** — draw rectangles/boxes
-- **Text** — add text annotations
+- **Arrow / Rectangle** — annotation shapes
+- **Text** — add text overlays
 - **Blur** — pixelate sensitive regions
-- **Crop** — iPhone-style quick crop with rule-of-thirds grid
+- **Crop** — iPhone-style crop with drag handles
 - **Eraser** — remove annotations
 - **Undo/Redo** — full history stack
 
+### Text Editing
+- **Rich text toolbar** — bold, italic, underline, strikethrough, headings, lists, code, links
+- **Auto-save** — edits saved on blur
+
 ### Organization
-- **Folders** — create color-coded folders, pin to sidebar, drag clips to organize
-- **Auto-grouping** — clips automatically sorted by type and date
-- **Favorites** — star important clips
-- **Search** — full-text search across clip titles, content, and extracted text
-- **Hidden folder** — passcode-protected folder with email recovery option
-- **Tabs** — open multiple clips simultaneously, drag tab to folders
+- **Folders** — color-coded, pinnable to top bar, drag clips to organize
+- **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Images/Text/Links/Code/Favorites)
+- **All Clips** — view with sorting (newest, oldest, A–Z, size)
+- **Search** — full-text with filters: `type:image`, `date:today`, `from:2024-01-01`, `is:fav`
+- **Hidden folder** — passcode-protected with email recovery
+- **Tabs** — open multiple clips, right-click for tab actions
+- **File explorer** — built-in sidebar with quick access to Desktop, Documents, Downloads, Pictures
 
 ### Sharing
-- **QR Code** — generate temporary QR codes for phone-to-PC sharing
-- **Temporary links** — create expiring LAN-accessible links (30min default)
+- **QR Code** — temporary QR codes for phone-to-PC transfer
+- **Temporary links** — expiring LAN links (30min default)
 - **Email** — open default mail client with share link
 
-### AI Features
-- **Ask AI about images** — supports OpenAI, Ollama (local), or custom endpoints
-- **OCR** — extract text from screenshots using Tesseract.js
-- **QR detection** — detect and decode QR codes in images
-- **Web search** — reverse image search via Google Lens
-
-### Text & Links
-- **Built-in text editor** — edit text clips inline
-- **Link detection** — auto-categorizes URLs
-- **Code detection** — recognizes code snippets
-- **Highlight-to-search** — select text and search Google
-
-### Additional Features
-- **System tray** — runs in background, double-click tray icon to open
-- **Global shortcuts** — `Ctrl+Shift+V` to show app from anywhere
-- **Context menus** — right-click clips for quick actions
-- **Drag & drop** — drag clips out of the app or between folders
-- **Dark theme** — Figma-inspired dark UI with subtle blur/glow effects
-- **Clip glow** — YouTube theater-mode style ambient glow around clips
+### AI
+- **Ask AI** — works on images and text clips
+- **Extract Text (OCR)** — Tesseract.js with partial selection & copy
+- **QR detection** — decode QR codes in images
+- **Providers** — OpenAI, Ollama (local), or custom OpenAI-compatible endpoints
 
 ## Keyboard Shortcuts
 
@@ -61,65 +50,54 @@ A powerful screenshot & clipboard manager for Windows inspired by iPhone's scree
 |---|---|
 | `PrintScreen` | Full-screen screenshot |
 | `Ctrl+Shift+S` | Selection screenshot |
-| `Ctrl+Shift+V` | Show/focus app |
-| `Ctrl+V` | Paste from clipboard into app |
-| `Ctrl+Z` | Undo (in editor) |
-| `Ctrl+Y` | Redo (in editor) |
+| `Ctrl+Shift+V` | Show/hide app |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
 | `Ctrl+S` | Save edits |
-| `Delete` | Delete active clip |
-| `Escape` | Close detail view |
+| `Ctrl+A` | Select all (in select mode) |
+| `Delete` | Delete selected clip(s) |
+| `Escape` | Close editor / exit select mode |
 
 ## Setup
 
 ```bash
-# Install dependencies
-npm install
-
-# Run in development
-npm start
-
-# Build for Windows
-npm run build
+npm install       # Install dependencies
+npm run dev       # Development (with DevTools)
+npm start         # Production-like run
+npm run build     # Build Windows installer
 ```
-
-## AI Configuration
-
-Go to **Settings > AI Provider** to configure:
-- **OpenAI** — enter your API key, uses GPT-4o-mini for vision
-- **Ollama** — local AI, install Ollama and pull a vision model like `llava`
-- **Custom** — any OpenAI-compatible API endpoint
 
 ## Tech Stack
 
-- **Electron** — desktop framework
-- **better-sqlite3** — local database for clip metadata
+- **Electron 28** — desktop framework
+- **sql.js** — in-process SQLite (pure JS, no native builds)
 - **Tesseract.js** — OCR text extraction
-- **jsQR** — QR code detection
-- **qrcode** — QR code generation
+- **Jimp** — image processing
+- **jsQR / qrcode** — QR detection & generation
 - **Express** — local share server
-- **Sharp/Jimp** — image processing
+- **uuid** — clip ID generation
 
 ## Architecture
 
 ```
 electron/
-  main.js            — Main process, window management, IPC
-  preload.js         — Context bridge API
-  database.js        — SQLite database for clips, folders, groups, settings
+  main.js              — Main process, window management, IPC handlers
+  preload.js           — Context bridge API (ucb.*)
+  database.js          — sql.js database (clips, folders, settings)
   clipboard-monitor.js — Polls clipboard for changes
   screenshot-capture.js — Screen capture with selection overlay
-  share-server.js    — Express server for temporary share links
-  ai-engine.js       — AI provider integrations
-  file-manager.js    — File import/export
+  share-server.js      — Express server for temporary share links
+  ai-engine.js         — AI provider integrations
+  file-manager.js      — File import/export
 src/
   renderer/
-    app.js           — Main UI logic, views, tabs, actions
-    editor.js        — Canvas-based image editor
-    dialogs.js       — Modal dialogs (share, AI, folders, passcode)
+    app.js             — Main UI logic, rendering, actions
+    editor.js          — Canvas-based image editor
+    dialogs.js         — Modal dialogs (share, AI, folders, passcode)
   styles/
-    main.css         — Core layout and theme
-    editor.css       — Editor toolbar and tools
-    dialogs.css      — Modal and form styles
-    animations.css   — Transitions and keyframes
+    main.css           — Core layout and theme
+    editor.css         — Editor toolbar and tools
+    dialogs.css        — Modal and form styles
+    animations.css     — Keyframes and transitions
+index.html             — Single-page app shell
 ```
-

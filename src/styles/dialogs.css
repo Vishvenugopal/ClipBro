@@ -10,6 +10,7 @@
   justify-content: center;
   animation: fadeIn 0.2s ease;
 }
+.modal-overlay.hidden { display: none; }
 
 .modal-content {
   background: var(--bg-secondary);

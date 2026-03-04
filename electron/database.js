@@ -1,4 +1,4 @@
-const initSqlJs = require('sql.js');
+const initSqlJs = require('sql.js/dist/sql-asm.js');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -6,6 +6,7 @@ const crypto = require('crypto');
 
 class ClipDatabase {
   constructor(dataDir) {
+    this.dataDir = dataDir;
     this.dbPath = path.join(dataDir, 'clips.db');
     this.db = null;
     this.ready = false;
@@ -13,6 +14,7 @@ class ClipDatabase {
   }
 
   async _init() {
+    // Using sql-asm.js (no WASM needed, works inside ASAR)
     const SQL = await initSqlJs();
     if (fs.existsSync(this.dbPath)) {
       const buf = fs.readFileSync(this.dbPath);
@@ -95,6 +97,7 @@ class ClipDatabase {
         icon TEXT DEFAULT 'folder',
         pinned INTEGER DEFAULT 0,
         sortOrder INTEGER DEFAULT 0,
+        path TEXT,
         createdAt INTEGER NOT NULL
       );
     `);
@@ -135,18 +138,17 @@ class ClipDatabase {
       this.db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);
     }
 
-    // Default folders
-    const fc = this._get('SELECT COUNT(*) as count FROM folders');
-    if (!fc || fc.count === 0) {
+    // Migration: add path column if missing
+    try { this.db.run('ALTER TABLE folders ADD COLUMN path TEXT'); } catch(e) { /* already exists */ }
+
+    // Ensure default "My Folder" pin exists (for new and existing DBs)
+    const myFolder = this._get("SELECT * FROM folders WHERE name = 'My Folder' AND path IS NOT NULL");
+    if (!myFolder) {
       const now = Date.now();
-      const folders = [
-        [uuidv4(), 'Screenshots', '#ff3b30', 'camera', 1, 0, now],
-        [uuidv4(), 'Text Clips', '#5ac8fa', 'type', 1, 1, now],
-        [uuidv4(), 'Links', '#ff9500', 'link', 1, 2, now],
-        [uuidv4(), 'Files', '#4cd964', 'file', 1, 3, now],
-      ];
-      for (const f of folders) {
-        this.db.run('INSERT INTO folders (id, name, color, icon, pinned, sortOrder, createdAt) VALUES (?,?,?,?,?,?,?)', f);
+      const defaultPath = this.dataDir ? require('path').join(this.dataDir, 'UserFolders', 'My Folder') : null;
+      if (defaultPath) {
+        this.db.run('INSERT INTO folders (id, name, color, icon, pinned, sortOrder, path, createdAt) VALUES (?,?,?,?,?,?,?,?)',
+          [uuidv4(), 'My Folder', '#4cd964', 'folder', 1, 0, defaultPath, now]);
       }
     }
 
@@ -244,8 +246,8 @@ class ClipDatabase {
 
   createFolder(data) {
     const id = uuidv4();
-    this._run('INSERT INTO folders (id, name, color, icon, pinned, sortOrder, createdAt) VALUES (?,?,?,?,?,?,?)',
-      [id, data.name, data.color || '#4cd964', data.icon || 'folder', data.pinned ? 1 : 0, data.sortOrder || 0, Date.now()]);
+    this._run('INSERT INTO folders (id, name, color, icon, pinned, sortOrder, path, createdAt) VALUES (?,?,?,?,?,?,?,?)',
+      [id, data.name, data.color || '#4cd964', data.icon || 'folder', data.pinned ? 1 : 0, data.sortOrder || 0, data.path || null, Date.now()]);
     return this._get('SELECT * FROM folders WHERE id = ?', [id]);
   }
 

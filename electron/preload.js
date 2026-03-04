@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('ucb', {
   getHiddenClips: (passcode) => ipcRenderer.invoke('get-hidden-clips', passcode),
   moveToHidden: (clipId, passcode) => ipcRenderer.invoke('move-to-hidden', clipId, passcode),
 
+  // Screenshots
+  takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  takeScreenshotSelection: () => ipcRenderer.invoke('take-screenshot-selection'),
+
   // Screenshot editing
   saveEditedClip: (clipId, imageDataUrl) => ipcRenderer.invoke('save-edited-clip', clipId, imageDataUrl),
 
@@ -58,22 +62,22 @@ contextBridge.exposeInMainWorld('ucb', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
 
+  // Storage / Clear
+  chooseDirectory: () => ipcRenderer.invoke('choose-directory'),
+  clearAllClips: () => ipcRenderer.invoke('clear-all-clips'),
+
   // Open external
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Drag
   startDrag: (clipId) => ipcRenderer.send('drag-start', clipId),
 
-  // Groups
-  getGroups: () => ipcRenderer.invoke('get-groups'),
-  autoGroupClips: () => ipcRenderer.invoke('auto-group-clips'),
-
-  // Search
-  searchClips: (query) => ipcRenderer.invoke('search-clips', query),
-
-  // Highlight search
-  highlightSearch: (text) => ipcRenderer.invoke('highlight-search', text),
-  highlightSearchImage: (imageDataUrl) => ipcRenderer.invoke('highlight-search-image', imageDataUrl),
+  // File explorer
+  listDirectory: (dirPath) => ipcRenderer.invoke('list-directory', dirPath),
+  getAppFolder: () => ipcRenderer.invoke('get-app-folder'),
+  getQuickAccessPaths: () => ipcRenderer.invoke('get-quick-access-paths'),
+  openInExplorer: (filePath) => ipcRenderer.invoke('open-in-explorer', filePath),
+  copyClipToPath: (clipId, destDir) => ipcRenderer.invoke('copy-clip-to-path', clipId, destDir),
 
   // Events from main process
   onNewClip: (callback) => {
