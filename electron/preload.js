@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('ucb', {
   deleteFolder: (folderId) => ipcRenderer.invoke('delete-folder', folderId),
 
   // Hidden folder
+  hasPasscode: () => ipcRenderer.invoke('has-passcode'),
   verifyPasscode: (passcode) => ipcRenderer.invoke('verify-passcode', passcode),
   setPasscode: (passcode, email) => ipcRenderer.invoke('set-passcode', passcode, email),
   getHiddenClips: (passcode) => ipcRenderer.invoke('get-hidden-clips', passcode),

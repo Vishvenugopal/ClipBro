@@ -89,7 +89,7 @@
 
         <!-- Bottom buttons (always pinned) -->
         <div class="sidebar-bottom-actions">
-          <button class="sidebar-bottom-btn" id="hiddenFolderBtn" title="Hidden folder">
+          <button class="sidebar-bottom-btn hidden" id="hiddenFolderBtn" title="Hidden folder">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             <span>Hidden</span>
           </button>
@@ -127,49 +127,68 @@
         </div>
 
         <!-- TOP SUB-PANEL: Editor (shown when editing) -->
-        <div id="bottomPanel" class="center-sub-panel editor-panel hidden">
+        <div id="bottomPanel" class="center-sub-panel editor-panel">
+          <div id="editorEmptyState" class="editor-empty-state">
+            <div class="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12h8M12 8v8"/></svg>
+            </div>
+            <h2>Select a clip to edit</h2>
+            <p>Click on any clip in the library to preview and edit it here.</p>
+            <div class="empty-shortcuts">
+              <div class="shortcut"><kbd>PrintScreen</kbd> Screenshot</div>
+              <div class="shortcut"><kbd>Ctrl+Shift+S</kbd> Selection</div>
+              <div class="shortcut"><kbd>Ctrl+Z</kbd> Undo</div>
+              <div class="shortcut"><kbd>Ctrl+Y</kbd> Redo</div>
+              <div class="shortcut"><kbd>Ctrl+S</kbd> Save</div>
+              <div class="shortcut"><kbd>Delete</kbd> Delete clip</div>
+            </div>
+          </div>
           <div class="editor-overlay-header">
             <span id="editorClipTitle" class="editor-clip-title">Editing</span>
             <button class="editor-close-btn" id="closeEditorBtn" title="Close editor">&times;</button>
           </div>
           <div id="editorToolbar" class="editor-toolbar">
             <button class="tool-btn" data-tool="crop" title="Crop">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.13 1L6 16a2 2 0 002 2h15"/><path d="M1 6.13L16 6a2 2 0 012 2v15"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14h14"/><path d="M18 22V8H4"/></svg>
             </button>
             <button class="tool-btn" data-tool="pen" title="Draw">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L7 21H3v-4L17 3z"/></svg>
             </button>
             <button class="tool-btn" data-tool="highlighter" title="Highlighter">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 01-2.8 0l-5.2-5.2a2 2 0 010-2.8L14 4"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 4.5l4 4L8 20H4v-4L15.5 4.5z"/><line x1="2" y1="22" x2="10" y2="22"/></svg>
             </button>
             <button class="tool-btn" data-tool="arrow" title="Arrow">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </button>
             <button class="tool-btn" data-tool="rectangle" title="Rectangle">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
             </button>
             <button class="tool-btn" data-tool="text" title="Text">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9.5" y1="20" x2="14.5" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9.5" y1="20" x2="14.5" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
             </button>
             <button class="tool-btn" data-tool="blur" title="Blur">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/></svg>
             </button>
             <div class="tool-separator"></div>
             <button class="tool-btn" data-tool="hand" title="Pan (Hand)">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 00-4 0v2"/><path d="M14 8V4a2 2 0 00-4 0v6"/><path d="M10 10V6a2 2 0 00-4 0v8"/><path d="M18 11a2 2 0 014 0v3a8 8 0 01-8 8h-2c-2.5 0-4.7-1.2-6.1-3l-3.5-5a2 2 0 013-2.4L6 14"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V4.5a1.5 1.5 0 013 0V12"/><path d="M11 11.5V2.5a1.5 1.5 0 013 0V12"/><path d="M14 10.5V4.5a1.5 1.5 0 013 0V12"/><path d="M17 11.5a1.5 1.5 0 013 0V15a7 7 0 01-7 7h-2a7 7 0 01-6-3.4L3.2 15a1.5 1.5 0 012.4-1.8L8 16"/></svg>
             </button>
             <button class="tool-btn" data-tool="zoom-in" title="Zoom In">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
             </button>
             <button class="tool-btn" data-tool="zoom-out" title="Zoom Out">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
             </button>
             <div class="tool-separator"></div>
             <button class="tool-btn" data-tool="eraser" title="Eraser">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16l9-9 8 8-4 4"/><path d="M6.5 13.5l5-5"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7l-4-4 9-9 8 8-4 4z"/><line x1="6.5" y1="13.5" x2="11.5" y2="8.5"/></svg>
             </button>
-            <button class="tool-btn" data-tool="undo" title="Undo (Ctrl+Z)">↩</button>
-            <button class="tool-btn" data-tool="redo" title="Redo (Ctrl+Y)">↪</button>
+            <button class="tool-btn" data-tool="undo" title="Undo (Ctrl+Z)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 105.64-11.36L1 10"/></svg>
+            </button>
+            <button class="tool-btn" data-tool="redo" title="Redo (Ctrl+Y)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-5.64-11.36L23 10"/></svg>
+            </button>
             <div class="tool-separator"></div>
             <div class="color-picker-group">
               <div class="color-palette-wrap">

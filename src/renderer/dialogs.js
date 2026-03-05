@@ -35,7 +35,11 @@ const Dialogs = {
 
   // ===== New Folder =====
   showNewFolderDialog() {
-    const colors = ['#4cd964','#ff3b30','#ff9500','#ffcc00','#5ac8fa','#af52de','#ff2d55'];
+    const colors = [
+      '#2d8a4e','#c0392b','#c47200','#b8960f','#2980b9','#8e44ad','#c0294a',
+      '#1a5e32','#8b1a1a','#8a5200','#7a6400','#1a5276','#6c2d82','#8a1a38',
+      '#5dbe78','#e74c3c','#e8a317','#d4ac0d','#5dade2','#bb6bd9','#e84573'
+    ];
     const defaultPath = App.explorerHomePath || '';
     this.show(`
       <div class="modal-header">
@@ -56,10 +60,10 @@ const Dialogs = {
       </div>
       <div class="form-group">
         <label class="form-label">Color</label>
-        <div style="display:flex;gap:8px;margin-top:4px">
-          ${colors.map((c, i) => `<button class="color-option" data-color="${c}" style="width:28px;height:28px;border-radius:50%;border:2px solid ${i === 0 ? '#fff' : 'transparent'};background:${c};cursor:pointer" onclick="this.parentElement.querySelectorAll('.color-option').forEach(b=>b.style.borderColor='transparent');this.style.borderColor='#fff';document.getElementById('selectedFolderColor').value='${c}'"></button>`).join('')}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;max-width:260px">
+          ${colors.map(c => `<button class="color-option" data-color="${c}" style="width:26px;height:26px;border-radius:50%;border:2px solid transparent;background:${c};cursor:pointer" onclick="this.parentElement.querySelectorAll('.color-option').forEach(b=>b.style.borderColor='transparent');this.style.borderColor='#fff';document.getElementById('selectedFolderColor').value='${c}'"></button>`).join('')}
         </div>
-        <input type="hidden" id="selectedFolderColor" value="#4cd964" />
+        <input type="hidden" id="selectedFolderColor" value="${colors[Math.floor(Math.random() * colors.length)]}" />
       </div>
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-secondary)">
@@ -194,13 +198,28 @@ const Dialogs = {
       console.error('Device auth error:', e);
     }
 
+    // Check if a passcode has been set
+    const hasPasscode = await ucb.hasPasscode();
+
+    if (!hasPasscode) {
+      // No passcode set and Windows Hello unavailable — open hidden folder directly
+      const clips = await ucb.getHiddenClips('__device_auth__');
+      this.close();
+      App.clips = clips || [];
+      App.activeView = 'hidden';
+      document.getElementById('clipGrid').classList.remove('hidden');
+      document.getElementById('emptyState').classList.add('hidden');
+      App.renderClipGrid();
+      return;
+    }
+
     // Fallback to passcode if Windows Hello is unavailable
     this.show(`
       <div class="modal-header">
         <h2>Hidden Folder</h2>
         <button class="modal-close" onclick="Dialogs.close()">&times;</button>
       </div>
-      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:12px">Windows Hello unavailable. Enter your passcode to access hidden clips.</p>
+      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:12px">Enter your passcode to access hidden clips.</p>
       <div class="form-group">
         <input type="password" class="form-input" id="accessPasscode" placeholder="Enter passcode" maxlength="6" autofocus />
       </div>

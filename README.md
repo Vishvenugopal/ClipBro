@@ -1,6 +1,8 @@
 # Universal Clipboard
 
-A screenshot & clipboard manager for Windows, built with Electron. Automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
+Powerful screenshot & clipboard manager for Windows, with easy file sharing to phones.
+
+Automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
 
 ## Features
 
@@ -31,7 +33,7 @@ A screenshot & clipboard manager for Windows, built with Electron. Automatically
 - **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Favorites/Images/Text/Links/Code/Other)
 - **All Clips** — view with sorting (newest, oldest, A–Z, size)
 - **Search** — full-text with filters: `type:image`, `date:today`, `from:2024-01-01`, `is:fav`
-- **Hidden folder** — protected by Windows Hello (fingerprint, face, or PIN); falls back to custom passcode
+- **Hidden folder** — protected by Windows Hello (fingerprint, face, or PIN); falls back to custom passcode; opens directly if no passcode is set
 - **Tabs** — open multiple clips, shift-click to multi-select, right-click for tab actions (Close Selected, Close All, Close to Right)
 - **File explorer** — built-in sidebar with quick access to Desktop, Documents, Downloads, Pictures
 - **Dual-panel layout** — editor panel above library panel, both visible simultaneously with resizable split
@@ -56,6 +58,7 @@ Global shortcuts are **configurable in Settings → Keyboard Shortcuts**. Defaul
 | `Ctrl+Shift+S` | Selection screenshot |
 | `Ctrl+Shift+V` | Show/hide app |
 | `Ctrl+Z` | Undo (editor) |
+| `Ctrl+Shift+Z` | Undo (editor) |
 | `Ctrl+Y` | Redo (editor) |
 | `Ctrl+S` | Save edits |
 | `Ctrl+A` | Select all (in select mode) |

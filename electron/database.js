@@ -325,6 +325,11 @@ class ClipDatabase {
   }
 
   // ===== Hidden Folder =====
+  hasPasscode() {
+    const stored = this._get("SELECT value FROM settings WHERE key = 'passcode'");
+    return !!(stored && stored.value);
+  }
+
   verifyPasscode(passcode) {
     const stored = this._get("SELECT value FROM settings WHERE key = 'passcode'");
     if (!stored || !stored.value) return false;

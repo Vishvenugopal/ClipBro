@@ -15,7 +15,7 @@ class AIEngine {
       provider: this.db.getSetting('aiProvider') || 'ollama',
       apiKey: this.db.getSetting('aiApiKey') || '',
       model: this.db.getSetting('aiModel') || 'llava',
-      endpoint: this.db.getSetting('aiEndpoint') || 'http://localhost:11434'
+      endpoint: this.db.getSetting('aiEndpoint') || 'http://127.0.0.1:11434'
     };
   }
 
@@ -104,7 +104,7 @@ class AIEngine {
   }
 
   ollamaVision(base64, prompt, settings) {
-    const endpoint = settings.endpoint || 'http://localhost:11434';
+    const endpoint = settings.endpoint || 'http://127.0.0.1:11434';
     const url = new URL('/api/generate', endpoint);
     const body = JSON.stringify({
       model: settings.model || 'llava',
@@ -178,8 +178,11 @@ class AIEngine {
     if (!textContent) return { error: 'No text content in this clip' };
 
     const settings = this.getSettings();
-    if (settings.provider === 'none' || !settings.apiKey) {
+    if (settings.provider === 'none') {
       return { error: 'No AI provider configured. Go to Settings > AI to set up.' };
+    }
+    if ((settings.provider === 'openai' || settings.provider === 'custom') && !settings.apiKey) {
+      return { error: 'API key required for this provider. Go to Settings > AI to set up.' };
     }
 
     try {
@@ -232,7 +235,7 @@ class AIEngine {
   }
 
   ollamaText(prompt, settings) {
-    const endpoint = settings.endpoint || 'http://localhost:11434';
+    const endpoint = settings.endpoint || 'http://127.0.0.1:11434';
     const url = new URL('/api/generate', endpoint);
     const body = JSON.stringify({
       model: settings.model || 'llama3',

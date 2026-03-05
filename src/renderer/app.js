@@ -1,5 +1,12 @@
 // ===== Universal Clipboard - Main Renderer =====
 
+const FOLDER_COLORS = [
+  '#2d8a4e','#c0392b','#c47200','#b8960f','#2980b9','#8e44ad','#c0294a',
+  '#1a5e32','#8b1a1a','#8a5200','#7a6400','#1a5276','#6c2d82','#8a1a38',
+  '#5dbe78','#e74c3c','#e8a317','#d4ac0d','#5dade2','#bb6bd9','#e84573'
+];
+function randomFolderColor() { return FOLDER_COLORS[Math.floor(Math.random() * FOLDER_COLORS.length)]; }
+
 const App = {
   clips: [],
   folders: [],
@@ -47,12 +54,24 @@ const App = {
       this.renderClipGrid();
       this.renderLibraryTabs();
       this.hideSortBarNav();
+      // Set editor to empty state on launch (show empty message, hide editor chrome)
+      document.querySelector('.editor-overlay-header').style.display = 'none';
+      document.querySelector('.editor-action-bar').style.display = 'none';
+      document.querySelector('.editor-canvas-wrapper').style.display = 'none';
+      document.getElementById('editorToolbar').style.display = 'none';
+      document.getElementById('editorCanvas').style.display = 'none';
+      document.getElementById('panelResizeHandle').classList.add('hidden');
       console.log('[App] UI rendered, initializing file explorer...');
       await this.initFileExplorer();
       // Apply saved zoom (default 100%) using Electron webFrame
       const savedSettings = await ucb.getSettings() || {};
       const savedScale = parseInt(savedSettings.uiScale) || 100;
       this._setZoom(savedScale, true);
+      // Show hidden folder button if experimental feature is enabled
+      if (savedSettings.experimentalHiddenFolder === 'true') {
+        const hiddenBtn = document.getElementById('hiddenFolderBtn');
+        if (hiddenBtn) hiddenBtn.classList.remove('hidden');
+      }
       console.log('[App] Init complete');
     } catch (e) {
       console.error('[App] Init failed:', e);
@@ -113,7 +132,7 @@ const App = {
         const folderName = this._dragFolderName || folderPath.replace(/\\/g, '/').split('/').pop();
         const alreadyPinned = this.folders.some(f => f.path && f.path.replace(/\\/g, '/') === folderPath.replace(/\\/g, '/'));
         if (!alreadyPinned) {
-          await ucb.createFolder({ name: folderName, color: '#4cd964', pinned: true, path: folderPath });
+          await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: folderPath });
           this.folders = await ucb.getFolders();
           this.renderPinnedFolders();
           this.renderQuickAccess();
@@ -126,6 +145,7 @@ const App = {
 
     // Bottom buttons
     document.getElementById('hiddenFolderBtn').addEventListener('click', () => Dialogs.showPasscodeDialog());
+    document.getElementById('actionHistoryBtn').addEventListener('click', () => this.showActionHistory());
     document.getElementById('settingsBtn').addEventListener('click', () => this.toggleSettings());
     document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
     document.getElementById('settingsOverlay').addEventListener('click', (e) => {
@@ -349,7 +369,7 @@ const App = {
     if (!handle) return;
     let isResizing = false, startY, startEditorH, startLibH;
     handle.addEventListener('mousedown', (e) => {
-      if (editorPanel.classList.contains('hidden')) return;
+      if (!App.editorOpen) return;
       isResizing = true; startY = e.clientY;
       startEditorH = editorPanel.offsetHeight; startLibH = libraryPanel.offsetHeight;
       handle.classList.add('active');
@@ -444,7 +464,7 @@ const App = {
   async bulkDeleteSelected() {
     const count = this.selectedClips.size;
     if (count === 0) return;
-    const confirmed = await Dialogs.confirm(`Delete ${count} clip(s)?`, 'This cannot be undone.');
+    const confirmed = await Dialogs.confirm(`Delete ${count} clip(s)?`, 'Files will be moved to the Recycle Bin.');
     if (!confirmed) return;
     for (const id of this.selectedClips) {
       await ucb.deleteClip(id);
@@ -455,8 +475,10 @@ const App = {
     this.selectedClips.clear();
     this.renderClipGrid();
     this.renderLeftSidebar();
+    this.renderPinnedFolders();
+    this.refreshExplorer();
     this.updateBulkUI();
-    this.toast(`Deleted ${count} clip(s)`, 'info');
+    this.toast(`${count} clip(s) moved to Recycle Bin`, 'info');
   },
 
   async bulkMoveToFolder() {
@@ -508,11 +530,8 @@ const App = {
     const container = document.getElementById('pinnedFoldersList');
     container.innerHTML = '';
     const pinned = this.folders.filter(f => f.pinned);
-    if (pinned.length === 0 && this.folders.length > 0) {
-      this.folders.forEach(f => this._renderPinnedCard(container, f));
-    } else {
-      pinned.forEach(f => this._renderPinnedCard(container, f));
-    }
+    const foldersToRender = (pinned.length === 0 && this.folders.length > 0) ? this.folders : pinned;
+    foldersToRender.forEach(f => this._renderPinnedCard(container, f));
     // Add button after last folder card
     const addBtn = document.createElement('button');
     addBtn.className = 'pinned-folder-add';
@@ -523,6 +542,43 @@ const App = {
     container.appendChild(addBtn);
     // Update scroll fades
     this._updatePinnedFades();
+    // Async: scan filesystem-backed folders for image thumbnails
+    this._loadPinnedFolderThumbs(foldersToRender);
+  },
+
+  async _loadPinnedFolderThumbs(folders) {
+    if (!this._pinnedFolderThumbs) this._pinnedFolderThumbs = {};
+    const imgExts = ['.png','.jpg','.jpeg','.gif','.bmp','.webp','.svg','.ico'];
+    let changed = false;
+    for (const f of folders) {
+      if (!f.path) continue;
+      try {
+        const entries = await ucb.listDirectory(f.path);
+        const images = entries.filter(e => !e.isDirectory && imgExts.includes(e.extension))
+          .sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 3).map(e => e.path);
+        const old = this._pinnedFolderThumbs[f.id];
+        if (!old || JSON.stringify(old) !== JSON.stringify(images)) {
+          this._pinnedFolderThumbs[f.id] = images;
+          changed = true;
+        }
+      } catch { /* skip inaccessible */ }
+    }
+    if (changed) {
+      // Re-render only the paper thumbnails without full re-render to avoid loops
+      for (const f of folders) {
+        if (!f.path || !this._pinnedFolderThumbs[f.id]?.length) continue;
+        const card = document.querySelector(`.pinned-folder-card[data-folder-id="${f.id}"]`);
+        if (!card) continue;
+        const papersEl = card.querySelector('.pinned-folder-papers');
+        if (!papersEl) continue;
+        const folderClips = this.allClips.filter(c => c.folderId === f.id);
+        const hasClipImages = folderClips.some(c => c.type === 'image' && c.filePath);
+        if (hasClipImages) continue; // clip images take priority
+        papersEl.innerHTML = this._pinnedFolderThumbs[f.id].map(p =>
+          `<div class="folder-paper"><img src="file://${p.replace(/\\/g, '/')}" /></div>`
+        ).join('');
+      }
+    }
   },
 
   _updatePinnedFades() {
@@ -537,6 +593,13 @@ const App = {
     update();
     list.removeEventListener('scroll', update);
     list.addEventListener('scroll', update);
+    // Also update on window resize
+    if (!this._pinnedFadesResizeBound) {
+      this._pinnedFadesResizeBound = true;
+      window.addEventListener('resize', () => {
+        requestAnimationFrame(() => update());
+      });
+    }
   },
 
   _renderPinnedCard(container, folder) {
@@ -550,12 +613,18 @@ const App = {
     const count = folderClips.length;
 
     // Papers behind the folder (recent clip thumbnails peeking out)
-    const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
+    // For filesystem-backed folders, use cached directory images; for DB folders, use clip images
     let papersHtml = '';
-    paperClips.forEach(c => {
-      papersHtml += `<div class="folder-paper"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
-    });
-    if (paperClips.length === 0 && count > 0) {
+    const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
+    if (paperClips.length > 0) {
+      paperClips.forEach(c => {
+        papersHtml += `<div class="folder-paper"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
+      });
+    } else if (folder.path && this._pinnedFolderThumbs && this._pinnedFolderThumbs[folder.id]) {
+      this._pinnedFolderThumbs[folder.id].forEach(p => {
+        papersHtml += `<div class="folder-paper"><img src="file://${p.replace(/\\/g, '/')}" /></div>`;
+      });
+    } else if (count > 0) {
       papersHtml = '<div class="folder-paper"><div class="folder-paper-text">TXT</div></div>';
     }
 
@@ -669,11 +738,16 @@ const App = {
       const closable = tab.id !== 'all';
       const libTabIcons = {
         'All Clips': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg>',
+        'Today': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+        'Yesterday': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+        'This Week': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/></svg>',
+        'Older': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M17 18l2 2" opacity="0.5"/></svg>',
         'Favorites': '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-yellow)" stroke="var(--accent-yellow)" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
         'Images': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
         'Text': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
         'Links': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>',
-        'Code': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+        'Code': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+        'Other': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
       };
       const tabIcon = libTabIcons[tab.label] || (tab.folderPath ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>' : '');
       el.innerHTML = `${tabIcon}<span>${this.escapeHtml(tab.label)}</span>${closable ? '<button class="lib-tab-close">&times;</button>' : ''}`;
@@ -838,7 +912,7 @@ const App = {
       item.innerHTML = `
         <div class="recent-clip-thumb">${thumbHtml}</div>
         <div class="recent-clip-info">
-          <div class="rc-title">${this.escapeHtml(clip.title || 'Untitled')}</div>
+          <div class="rc-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 32))}</div>
           <div class="rc-meta">${this.formatTime(clip.createdAt)}</div>
         </div>
         <button class="recent-clip-delete" data-clip-id="${clip.id}" title="Delete">
@@ -975,6 +1049,21 @@ const App = {
     if (this.clips.length === 0) {
       grid.classList.add('hidden');
       empty.classList.remove('hidden');
+      // Show contextual empty message based on current view
+      const isFiltered = this.currentView === 'filtered' || this.activeView === 'hidden';
+      const emptyIcon = empty.querySelector('.empty-icon');
+      const emptyH2 = empty.querySelector('h2');
+      const emptyP = empty.querySelector('p');
+      const emptyShortcuts = empty.querySelector('.empty-shortcuts');
+      if (isFiltered) {
+        if (emptyH2) emptyH2.textContent = 'This group is empty';
+        if (emptyP) emptyP.textContent = 'No clips match this filter.';
+        if (emptyShortcuts) emptyShortcuts.style.display = 'none';
+      } else {
+        if (emptyH2) emptyH2.textContent = 'No clips yet';
+        if (emptyP) emptyP.textContent = 'Copy something, take a screenshot, or import a file to get started.';
+        if (emptyShortcuts) emptyShortcuts.style.display = '';
+      }
       return;
     }
 
@@ -1023,7 +1112,7 @@ const App = {
       card.innerHTML = `
         <div class="clip-card-thumb">${thumbContent}</div>
         <div class="clip-card-info">
-          <div class="clip-card-title">${this.escapeHtml(clip.title || 'Untitled')}</div>
+          <div class="clip-card-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 30))}</div>
           <div class="clip-card-meta"><span>${time}</span><span>${size}</span></div>
         </div>
         ${overlayBtn}
@@ -1052,8 +1141,14 @@ const App = {
             }
           }
           this._lastClickedClipId = clip.id;
-          if (this.selectedClips.has(clip.id)) { this.selectedClips.delete(clip.id); card.classList.remove('selected'); }
-          else { this.selectedClips.add(clip.id); card.classList.add('selected'); }
+          const sel = card.querySelector('.clip-card-select');
+          if (this.selectedClips.has(clip.id)) {
+            this.selectedClips.delete(clip.id); card.classList.remove('selected');
+            if (sel) { sel.classList.remove('checked'); sel.querySelector('svg')?.setAttribute('stroke', 'rgba(255,255,255,0.5)'); }
+          } else {
+            this.selectedClips.add(clip.id); card.classList.add('selected');
+            if (sel) { sel.classList.add('checked'); sel.querySelector('svg')?.setAttribute('stroke', '#000'); }
+          }
           this.updateBulkUI();
           return;
         }
@@ -1062,6 +1157,8 @@ const App = {
           this.selectMode = true;
           this.selectedClips.add(clip.id);
           this._lastClickedClipId = clip.id;
+          const sortBtn = document.getElementById('selectModeBtnSort');
+          if (sortBtn) sortBtn.classList.add('active');
           this.renderClipGrid();
           this.updateBulkUI();
           return;
@@ -1090,13 +1187,17 @@ const App = {
   },
 
   async quickDeleteClip(clipId) {
+    const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
+    if (!confirmed) return;
     await ucb.deleteClip(clipId);
     this.clips = this.clips.filter(c => c.id !== clipId);
     this.allClips = this.allClips.filter(c => c.id !== clipId);
     this.closeTab(clipId);
     this.renderClipGrid();
     this.renderLeftSidebar();
-    this.toast('Clip deleted', 'info');
+    this.renderPinnedFolders();
+    this.refreshExplorer();
+    this.toast('Clip moved to Recycle Bin', 'info');
   },
 
   // ===== Editor Panel (bottom sub-panel) =====
@@ -1107,13 +1208,16 @@ const App = {
     this.editorOpen = true;
     this.renderTabs();
 
-    const bottomPanel = document.getElementById('bottomPanel');
     const resizeHandle = document.getElementById('panelResizeHandle');
     const canvas = document.getElementById('editorCanvas');
     const textView = document.getElementById('textClipView');
     const toolbar = document.getElementById('editorToolbar');
+    const emptyState = document.getElementById('editorEmptyState');
 
-    bottomPanel.classList.remove('hidden');
+    if (emptyState) emptyState.classList.add('hidden');
+    document.querySelector('.editor-canvas-wrapper').style.display = '';
+    document.querySelector('.editor-overlay-header').style.display = '';
+    document.querySelector('.editor-action-bar').style.display = '';
     resizeHandle.classList.remove('hidden');
     document.getElementById('editorClipTitle').textContent = clip.title || 'Untitled';
 
@@ -1142,8 +1246,8 @@ const App = {
 
   _initTextEditor(textView, clip) {
     const content = clip.content || '';
-    // Undo/redo stack for this text editor session
-    this._textUndoStack = [content];
+    // Undo/redo stack for this text editor session (uses innerHTML to preserve formatting)
+    this._textUndoStack = [this.escapeHtml(content)];
     this._textRedoStack = [];
     this._textUndoTimer = null;
 
@@ -1175,7 +1279,7 @@ const App = {
     editor.addEventListener('input', () => {
       clearTimeout(this._textUndoTimer);
       this._textUndoTimer = setTimeout(() => {
-        const current = editor.innerText;
+        const current = editor.innerHTML;
         if (this._textUndoStack[this._textUndoStack.length - 1] !== current) {
           this._textUndoStack.push(current);
           this._textRedoStack = [];
@@ -1189,7 +1293,10 @@ const App = {
       if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         this._textEditorUndo(editor);
-      } else if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
+      } else if (e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        this._textEditorUndo(editor);
+      } else if (e.ctrlKey && e.key === 'y') {
         e.preventDefault();
         this._textEditorRedo(editor);
       }
@@ -1221,16 +1328,30 @@ const App = {
         } else {
           document.execCommand(action, false, null);
         }
+        // Snapshot after formatting action so undo captures it
+        setTimeout(() => {
+          const current = editor.innerHTML;
+          if (this._textUndoStack[this._textUndoStack.length - 1] !== current) {
+            this._textUndoStack.push(current);
+            this._textRedoStack = [];
+            if (this._textUndoStack.length > 100) this._textUndoStack.shift();
+          }
+        }, 50);
         editor.focus();
       });
     });
   },
 
   _textEditorUndo(editor) {
+    // Snapshot current state before undoing so we don't lose the latest
+    const current = editor.innerHTML;
+    if (this._textUndoStack[this._textUndoStack.length - 1] !== current) {
+      this._textUndoStack.push(current);
+    }
     if (this._textUndoStack.length > 1) {
-      const current = this._textUndoStack.pop();
-      this._textRedoStack.push(current);
-      editor.innerText = this._textUndoStack[this._textUndoStack.length - 1];
+      const popped = this._textUndoStack.pop();
+      this._textRedoStack.push(popped);
+      editor.innerHTML = this._textUndoStack[this._textUndoStack.length - 1];
     }
   },
 
@@ -1238,18 +1359,26 @@ const App = {
     if (this._textRedoStack.length > 0) {
       const next = this._textRedoStack.pop();
       this._textUndoStack.push(next);
-      editor.innerText = next;
+      editor.innerHTML = next;
     }
   },
 
   closeEditor() {
-    document.getElementById('bottomPanel').classList.add('hidden');
     document.getElementById('panelResizeHandle').classList.add('hidden');
     // Reset text view so it doesn't linger when opening an image next
     const textView = document.getElementById('textClipView');
     textView.classList.add('hidden');
     textView.style.display = 'none';
     textView.innerHTML = '';
+    // Hide editor content, show empty state
+    const canvas = document.getElementById('editorCanvas');
+    canvas.style.display = 'none'; canvas.classList.add('hidden');
+    document.getElementById('editorToolbar').style.display = 'none';
+    document.querySelector('.editor-overlay-header').style.display = 'none';
+    document.querySelector('.editor-action-bar').style.display = 'none';
+    document.querySelector('.editor-canvas-wrapper').style.display = 'none';
+    const emptyState = document.getElementById('editorEmptyState');
+    if (emptyState) emptyState.classList.remove('hidden');
     this.editorOpen = false;
     // Reset panel heights
     document.getElementById('topPanel').style.flex = '';
@@ -1258,6 +1387,7 @@ const App = {
 
   // ===== Tabs =====
   closeTab(clipId) {
+    this._hideTabPreview();
     this.openTabs = this.openTabs.filter(t => t.id !== clipId);
     if (this.activeTabId === clipId) {
       if (this.openTabs.length > 0) {
@@ -1294,7 +1424,7 @@ const App = {
         icon = `<span class="tab-icon" style="display:flex;align-items:center;justify-content:center">${tabIcons[clip.type] || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'}</span>`;
       }
 
-      tab.innerHTML = `${icon}<span class="tab-title">${this.escapeHtml((clip.title || 'Untitled').substring(0, 30))}</span><button class="tab-close">&times;</button>`;
+      tab.innerHTML = `${icon}<span class="tab-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 30))}</span><button class="tab-close">&times;</button>`;
 
       // Hover preview
       let hoverTimer = null;
@@ -1696,11 +1826,11 @@ const App = {
       const size = entry.isDirectory ? '' : this.formatSize(entry.size);
 
       if (showThumbs && isImage) {
-        item.innerHTML = `<div class="file-item-thumb"><img src="file://${entry.path.replace(/\\/g, '/')}" loading="lazy" /></div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-thumb"><img src="file://${entry.path.replace(/\\/g, '/')}" loading="lazy" /></div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 24))}</span><span class="file-item-meta">${size}</span>`;
       } else if (showThumbs) {
-        item.innerHTML = `<div class="file-item-thumb">${icon}</div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-thumb">${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 24))}</span><span class="file-item-meta">${size}</span>`;
       } else {
-        item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 28))}</span><span class="file-item-meta">${size}</span>`;
       }
 
       // Right-click context menu
@@ -1749,11 +1879,13 @@ const App = {
       if (entry.isDirectory) {
         item.draggable = true;
         item.addEventListener('dragstart', (e) => {
+          this._internalDrag = true;
           this._dragFolderPath = entry.path;
           this._dragFolderName = entry.name;
           e.dataTransfer.setData('text/x-folder-path', entry.path);
+          e.dataTransfer.effectAllowed = 'copyMove';
         });
-        item.addEventListener('dragend', () => { this._dragFolderPath = null; this._dragFolderName = null; });
+        item.addEventListener('dragend', () => { this._internalDrag = false; this._dragFolderPath = null; this._dragFolderName = null; document.getElementById('dropZone').classList.add('hidden'); });
         item.addEventListener('dragover', (e) => { e.preventDefault(); item.classList.add('drag-over'); });
         item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
         item.addEventListener('drop', async (e) => {
@@ -1906,7 +2038,7 @@ const App = {
       if (action === 'open-explorer') ucb.openInExplorer(filePath);
       else if (action === 'add-pin') {
         const folderName = name || filePath.replace(/\\/g, '/').split('/').pop();
-        await ucb.createFolder({ name: folderName, color: '#4cd964', pinned: true, path: filePath });
+        await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: filePath });
         this.folders = await ucb.getFolders();
         this.renderPinnedFolders();
         this.renderQuickAccess();
@@ -2028,15 +2160,18 @@ const App = {
 
   async deleteActiveClip() {
     if (!this.activeClip) return;
-    const confirmed = await Dialogs.confirm('Delete this clip?', 'This cannot be undone.');
+    const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
     if (!confirmed) return;
     await ucb.deleteClip(this.activeClip.id);
     this.clips = this.clips.filter(c => c.id !== this.activeClip.id);
+    this.allClips = this.allClips.filter(c => c.id !== this.activeClip.id);
     this.closeTab(this.activeClip.id);
     this.closeEditor();
     this.renderClipGrid();
     this.renderLeftSidebar();
-    this.toast('Clip deleted', 'info');
+    this.renderPinnedFolders();
+    this.refreshExplorer();
+    this.toast('Clip moved to Recycle Bin', 'info');
   },
 
   async toggleFavoriteById(clipId) {
@@ -2373,6 +2508,49 @@ const App = {
     return filters;
   },
 
+  // ===== Action History =====
+  showActionHistory() {
+    // Show a chronological view of all clips sorted by most recent
+    const recent = [...this.allClips].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 50);
+    if (recent.length === 0) { this.toast('No clip history yet', 'info'); return; }
+
+    const rows = recent.map((clip, i) => {
+      const date = new Date(clip.createdAt).toLocaleString();
+      const typeIcons = {
+        image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+        link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>',
+        text: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+        code: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+      };
+      const typeIcon = typeIcons[clip.type] || typeIcons.text;
+      const preview = this.escapeHtml((clip.title || clip.content || 'Untitled').substring(0, 60));
+      const folder = this.folders.find(f => f.id === clip.folderId);
+      const folderLabel = folder ? `<span style="font-size:9px;color:var(--accent-green);margin-left:4px;display:inline-flex;align-items:center;gap:2px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg> ${this.escapeHtml(folder.name)}</span>` : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background 0.15s" class="history-row" data-idx="${i}" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background='none'">
+        <span style="flex-shrink:0;display:flex;align-items:center">${typeIcon}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preview}${folderLabel}</div>
+          <div style="font-size:9px;color:var(--text-muted)">${date}${clip.source ? ' · ' + clip.source : ''}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    Dialogs.show(`
+      <div class="modal-header"><h2>Clipboard History</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+      <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">Last ${recent.length} clips, newest first. Click to open.</p>
+      <div style="max-height:400px;overflow-y:auto">${rows}</div>
+      <div class="btn-row"><button class="btn btn-secondary" onclick="Dialogs.close()">Close</button></div>
+    `);
+
+    document.querySelectorAll('.history-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = parseInt(row.dataset.idx);
+        const clip = recent[idx];
+        if (clip) { Dialogs.close(); this.openEditor(clip); }
+      });
+    });
+  },
+
   // ===== Settings =====
   toggleSettings() {
     const overlay = document.getElementById('settingsOverlay');
@@ -2444,9 +2622,10 @@ const App = {
         <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Edit versions are saved automatically when you modify a clip. Old versions are cleaned up on the schedule above.</p>
       </div>
       <div class="settings-section">
-        <h3>Hidden Folder</h3>
-        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Hidden folder is protected by Windows Hello (fingerprint, face, or PIN). Falls back to a custom passcode if Windows Hello is unavailable.</p>
-        <div class="setting-row"><label>Fallback passcode</label><button class="btn btn-secondary" onclick="Dialogs.showSetPasscodeDialog()">Set / Change</button></div>
+        <h3>Experimental</h3>
+        <div class="setting-row"><label>Hidden Folder</label><label class="toggle"><input type="checkbox" id="settHiddenFolder" ${settings.experimentalHiddenFolder === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Enable the Hidden Folder feature (protected by Windows Hello or passcode). Shows a "Hidden" button in the sidebar.</p>
+        <div class="setting-row" id="rowPasscode" style="${settings.experimentalHiddenFolder === 'true' ? '' : 'display:none'}"><label>Fallback passcode</label><button class="btn btn-secondary" onclick="Dialogs.showSetPasscodeDialog()">Set / Change</button></div>
       </div>
       <div class="settings-section">
         <h3>AI Provider</h3>
@@ -2507,6 +2686,12 @@ const App = {
       this.toast('Hotkeys reset to defaults', 'info');
     });
 
+    document.getElementById('settHiddenFolder').addEventListener('change', (e) => {
+      document.getElementById('rowPasscode').style.display = e.target.checked ? '' : 'none';
+      const hiddenBtn = document.getElementById('hiddenFolderBtn');
+      if (hiddenBtn) hiddenBtn.classList.toggle('hidden', !e.target.checked);
+    });
+
     document.getElementById('settAIProvider').addEventListener('change', (e) => {
       const v = e.target.value;
       document.getElementById('aiKeyGroup').style.display = (v==='openai'||v==='custom')?'block':'none';
@@ -2555,7 +2740,8 @@ const App = {
         uiScale: document.getElementById('settUiScale').value,
         hotkeyToggleApp: document.getElementById('settHotkeyToggleApp').dataset.accelerator || '',
         hotkeyScreenshot: document.getElementById('settHotkeyScreenshot').dataset.accelerator || '',
-        hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || ''
+        hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || '',
+        experimentalHiddenFolder: document.getElementById('settHiddenFolder').checked?'true':'false'
       });
       // Auto-cleanup history based on setting
       const cleanupDays = parseInt(document.getElementById('settHistoryDays').value);
@@ -2642,8 +2828,10 @@ const App = {
       { label: 'Generate Link', action: () => { this.activeClip = clip; this.generateShareLink(); } },
       'separator',
       { label: 'Delete', danger: true, action: async () => {
+        const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
+        if (!confirmed) return;
         await ucb.deleteClip(clip.id); this.allClips = this.allClips.filter(c => c.id !== clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
-        this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer(); this.toast('Deleted', 'info');
+        this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer(); this.toast('Clip moved to Recycle Bin', 'info');
       }}
     ];
 
@@ -2698,7 +2886,11 @@ const App = {
       { label: 'Browse in Sidebar', action: () => { if (folder.path) this.navigateExplorer(folder.path); }},
       { label: 'Browse in Library', action: () => { if (folder.path) this.openFolderInLibrary(folder.path, folder.name); }},
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(folder.path || ''); this.toast('Path copied', 'success'); }},
-      { label: 'Delete Folder', danger: true, action: async () => { await ucb.deleteFolder(folder.id); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.toast('Folder deleted', 'info'); }}
+      { label: 'Delete Folder', danger: true, action: async () => {
+        const confirmed = await Dialogs.confirm('Delete Folder', `Are you sure you want to delete "${folder.name}"? Clips inside will be unassigned, not deleted.`);
+        if (!confirmed) return;
+        await ucb.deleteFolder(folder.id); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.refreshExplorer(); this.toast('Folder deleted', 'info');
+      }}
     ];
 
     items.forEach(item => {
@@ -2737,7 +2929,11 @@ const App = {
       return;
     }
 
-    if (e.ctrlKey && e.key === 'z') {
+    if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+      if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
+      else { e.preventDefault(); this.performUndo(); }
+    }
+    if (e.ctrlKey && e.shiftKey && e.key === 'Z') {
       if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
       else { e.preventDefault(); this.performUndo(); }
     }
@@ -2838,6 +3034,13 @@ const App = {
   },
 
   escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; },
+
+  midTruncate(str, maxLen = 28) {
+    if (!str || str.length <= maxLen) return str;
+    const endLen = Math.max(8, Math.floor(maxLen * 0.35));
+    const startLen = maxLen - endLen - 1;
+    return str.substring(0, startLen) + '…' + str.substring(str.length - endLen);
+  },
 
   formatTime(timestamp) {
     if (!timestamp) return '';

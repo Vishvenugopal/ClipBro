@@ -239,6 +239,11 @@ function setupIPC() {
   });
 
   ipcMain.handle('delete-clip', async (_, id) => {
+    const { shell } = require('electron');
+    const clip = db.getClip(id);
+    if (clip && clip.filePath && fs.existsSync(clip.filePath)) {
+      try { await shell.trashItem(clip.filePath); } catch (e) { console.warn('Could not trash clip file:', e.message); }
+    }
     return db.deleteClip(id);
   });
 
@@ -291,6 +296,10 @@ function setupIPC() {
   });
 
   // Hidden folder
+  ipcMain.handle('has-passcode', async () => {
+    return db.hasPasscode();
+  });
+
   ipcMain.handle('verify-passcode', async (_, passcode) => {
     return db.verifyPasscode(passcode);
   });
@@ -300,7 +309,8 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-hidden-clips', async (_, passcode) => {
-    if (!db.verifyPasscode(passcode)) return null;
+    // Allow bypass when authenticated via Windows Hello / device auth
+    if (passcode !== '__device_auth__' && !db.verifyPasscode(passcode)) return null;
     return db.getHiddenClips();
   });
 
@@ -323,6 +333,13 @@ function setupIPC() {
 
   // Screenshot editing
   ipcMain.handle('save-edited-clip', async (_, clipId, imageDataUrl) => {
+    const clip = db.getClip(clipId);
+    // Preserve the previous version's file by copying it to a versioned backup
+    if (clip && clip.filePath && fs.existsSync(clip.filePath)) {
+      const ext = path.extname(clip.filePath) || '.png';
+      const versionPath = path.join(CLIPS_DIR, `${clipId}_v${Date.now()}${ext}`);
+      try { fs.copyFileSync(clip.filePath, versionPath); } catch {}
+    }
     const buffer = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const filePath = path.join(CLIPS_DIR, `${clipId}_edited.png`);
     fs.writeFileSync(filePath, buffer);
@@ -573,29 +590,35 @@ function setupIPC() {
   // Windows Hello / device credential authentication
   ipcMain.handle('authenticate-device', async () => {
     try {
-      // Temporarily lower the window so the Windows credential popup can appear on top
+      // Hide the window so the Windows credential popup appears on top
       if (mainWindow) {
-        mainWindow.setAlwaysOnTop(false);
-        mainWindow.blur();
+        mainWindow.hide();
       }
       // Use Electron's built-in systemPreferences for Windows Hello
       const { systemPreferences } = require('electron');
       if (systemPreferences.canPromptTouchID && systemPreferences.canPromptTouchID()) {
         await systemPreferences.promptTouchID('Access hidden folder');
-        if (mainWindow) mainWindow.focus();
+        if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
         return { success: true };
       }
       // Fallback: use Windows credential prompt via PowerShell
-      const { execSync } = require('child_process');
-      const result = execSync(
-        'powershell -Command "[Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync(\\"Universal Clipboard wants to access your hidden folder\\").AsTask().Result"',
-        { encoding: 'utf-8', timeout: 60000 }
-      ).trim();
-      if (mainWindow) mainWindow.focus();
+      const { exec } = require('child_process');
+      const psScript = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync('Universal Clipboard').AsTask().GetAwaiter().GetResult()`;
+      const result = await new Promise((resolve, reject) => {
+        exec(
+          `powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`,
+          { encoding: 'utf-8', timeout: 120000 },
+          (err, stdout, stderr) => {
+            if (err) reject(err);
+            else resolve(stdout.trim());
+          }
+        );
+      });
+      if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
       return { success: result === 'Verified' };
     } catch (e) {
       console.error('Device auth error:', e);
-      if (mainWindow) mainWindow.focus();
+      if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
       return { success: false, error: e.message };
     }
   });
