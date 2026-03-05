@@ -1,4 +1,5 @@
-# ClipBro
+
+# ![Logo](assets/clipbro-icons/Green%20Guy.png) ClipBro
 
 A powerful screenshot & clipboard manager for Windows, with easy file sharing to phones!
 
@@ -7,36 +8,34 @@ ClipBro automatically detects screenshots, copied text, images, and links. Edit 
 ## Features
 
 ### Capture
-- **Windows screenshot detection** — Screenshot as you normally would, ClipBro can detect it
-- **Full-screen screenshot** — `PrintScreen`
+- **Windows screenshot detection** — Screenshot as you normally would, ClipBro can detect it from the tray
 - **ClipBro's Selection screenshot** — `Ctrl+Shift+S`
 - **Clipboard monitoring** — auto-captures copied text, images, links
-- **Import files** — drag-and-drop or file picker
-
-### Image and Text Editing
-- **Image Editing Tools:** — Draw, Highlighter, Arrow, Rectangle, Text, blur, Crop, Eraser
-- **Text Editing Tools:** — Rich Text: bold, italic, underline, strikethrough, headings, lists, code, links
-- **Edit History:** — Easily view edit versions to files with version snapshots and undo/redo between them
-
-### Organization
-- **Folders** — color-coded, pinnable to top bar, drag clips to organize
-- **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Favorites/Images/Text/Links/Code/Other)
-- **All Clips** — view with sorting (newest, oldest, A–Z, size)
-- **Search** — full-text with filters: `type:image`, `date:today`, `from:2024-01-01`, `is:fav`
-- **Hidden folder** — protected by Windows Hello (fingerprint, face, or PIN); falls back to custom passcode; opens directly if no passcode is set
-- **Tabs** — open multiple clips, shift-click to multi-select, right-click for tab actions (Close Selected, Close All, Close to Right)
-- **File explorer** — built-in sidebar with quick access to Desktop, Documents, Downloads, Pictures
-- **Dual-panel layout** — editor panel above library panel, both visible simultaneously with resizable split
+- **Import files** — drag-and-drop files from outside the app, or use file picker
 
 ### Sharing
 - **QR Code** — generate QR codes for phone-to-PC transfer of screenshots/text (same Wi-Fi required)
 - **Temporary links** — expiring LAN links with copy button (same Wi-Fi required)
 
-### AI
+### Organization
+- **Tabs** — open multiple clips, shift-click to multi-select, right-click for tab actions (Close Selected, Close All, Close to Right)
+- **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Favorites/Images/Text/Links/Code/Other)
+- **Search** — full-text with filters: `type:image`, `date:today`, `from:2024-01-01`, `is:fav`
+- **In-App File explorer** — built-in sidebar with quick access to Desktop, Documents, Downloads, Pictures
+
+### Image and Text Editing
+- **Image Editing Tools:** — Draw, Highlighter, Arrow, Rectangle, Text, blur, Crop, Eraser
+- **Text Editing Tools:** — Rich Text: bold, italic, underline, strikethrough, headings, lists, code, links
+- **Edit History:** — View edit versions to files with version snapshots and undo/redo between them
+
+### Text Extraction and AI
 - **Ask AI** — works on images and text clips
 - **Extract Text (OCR)** — Tesseract.js with partial selection & copy
 - **QR detection** — decode QR codes in images
-- **Providers** — OpenAI, Ollama (local), or custom OpenAI-compatible endpoints
+- **Providers** — Ollama (local), OpenAI, or custom OpenAI-compatible endpoints
+
+## How to Install
+Download the latest release (Windows only) from the right side of the screen in the Releases section.
 
 ## Keyboard Shortcuts
 
@@ -44,9 +43,8 @@ Global shortcuts are **configurable in Settings → Keyboard Shortcuts**. Defaul
 
 | Shortcut | Action |
 |---|---|
-| `PrintScreen` | Full-screen screenshot |
-| `Ctrl+Shift+S` | Selection screenshot |
 | `Ctrl+Shift+V` | Show/hide app |
+| `Ctrl+Shift+S` | Built-in selection screenshot |
 | `Ctrl+Z` | Undo (editor) |
 | `Ctrl+Shift+Z` | Undo (editor) |
 | `Ctrl+Y` | Redo (editor) |
