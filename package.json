@@ -1,6 +1,6 @@
 {
   "name": "clipbro",
-  "version": "1.0.0",
+  "version": "1.0.0-beta",
   "description": "ClipBro - Your intelligent clipboard companion with AI features & Screenshot manager for Windows",
   "main": "electron/main.js",
   "scripts": {
@@ -27,9 +27,11 @@
   "build": {
     "appId": "com.clipbro.app",
     "productName": "ClipBro",
+    "icon": "assets/clipbro-icons/icon.png",
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "assets/clipbro-icons/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -40,7 +42,14 @@
       "electron/**/*",
       "src/**/*",
       "assets/**/*",
-      "index.html"
+      "index.html",
+      "eng.traineddata"
+    ],
+    "extraResources": [
+      {
+        "from": "eng.traineddata",
+        "to": "eng.traineddata"
+      }
     ]
   }
 }
