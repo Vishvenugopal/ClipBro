@@ -836,6 +836,10 @@ app.whenReady().then(async () => {
   db = new ClipDatabase(DATA_DIR);
   await db.waitReady();
 
+  // Apply launch-on-startup setting (default: on)
+  const openOnStartup = db.getSetting('openOnStartup');
+  app.setLoginItemSettings({ openAtLogin: openOnStartup !== 'false' });
+
   // Initialize file manager
   fileManager = new FileManager(db, CLIPS_DIR);
 
