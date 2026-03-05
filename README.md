@@ -2,13 +2,14 @@
 
 A powerful screenshot & clipboard manager for Windows, with easy file sharing to phones!
 
-ClipBro automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
+ClipBro automatically detects screenshots, copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
 
 ## Features
 
 ### Capture
+- **Windows screenshot detection** — Screenshot as you normally would, ClipBro can detect it
 - **Full-screen screenshot** — `PrintScreen`
-- **Selection screenshot** — `Ctrl+Shift+S`
+- **ClipBro's Selection screenshot** — `Ctrl+Shift+S`
 - **Clipboard monitoring** — auto-captures copied text, images, links
 - **Import files** — drag-and-drop or file picker
 
