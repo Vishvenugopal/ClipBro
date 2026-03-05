@@ -1,10 +1,11 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('ucb', {
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
+  showWindow: () => ipcRenderer.send('window-show'),
 
   // Clips
   getClips: (filters) => ipcRenderer.invoke('get-clips', filters),
@@ -47,6 +48,7 @@ contextBridge.exposeInMainWorld('ucb', {
 
   // AI
   aiAnalyzeImage: (clipId, prompt) => ipcRenderer.invoke('ai-analyze-image', clipId, prompt),
+  aiAnalyzeText: (clipId, prompt) => ipcRenderer.invoke('ai-analyze-text', clipId, prompt),
   aiSearchWeb: (clipId, useAI) => ipcRenderer.invoke('ai-search-web', clipId, useAI),
   getAISettings: () => ipcRenderer.invoke('get-ai-settings'),
   saveAISettings: (settings) => ipcRenderer.invoke('save-ai-settings', settings),
@@ -67,10 +69,14 @@ contextBridge.exposeInMainWorld('ucb', {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  getHotkeys: () => ipcRenderer.invoke('get-hotkeys'),
+  getDefaultHotkeys: () => ipcRenderer.invoke('get-default-hotkeys'),
 
   // Storage / Clear
   chooseDirectory: () => ipcRenderer.invoke('choose-directory'),
   clearAllClips: () => ipcRenderer.invoke('clear-all-clips'),
+  moveDataDirectory: (newDir) => ipcRenderer.invoke('move-data-directory', newDir),
+  authenticateDevice: () => ipcRenderer.invoke('authenticate-device'),
 
   // Open external
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
@@ -84,6 +90,7 @@ contextBridge.exposeInMainWorld('ucb', {
   getQuickAccessPaths: () => ipcRenderer.invoke('get-quick-access-paths'),
   openInExplorer: (filePath) => ipcRenderer.invoke('open-in-explorer', filePath),
   copyClipToPath: (clipId, destDir) => ipcRenderer.invoke('copy-clip-to-path', clipId, destDir),
+  readTextFile: (filePath) => ipcRenderer.invoke('read-text-file', filePath),
 
   // Events from main process
   onNewClip: (callback) => {
@@ -98,9 +105,16 @@ contextBridge.exposeInMainWorld('ucb', {
   onClipboardUpdate: (callback) => {
     ipcRenderer.on('clipboard-update', (_, clip) => callback(clip));
   },
+  onWindowVisibility: (callback) => {
+    ipcRenderer.on('window-visibility', (_, visible) => callback(visible));
+  },
 
   // Remove listeners
   removeAllListeners: (channel) => {
     ipcRenderer.removeAllListeners(channel);
-  }
+  },
+
+  // Zoom (uses Electron webFrame for proper layout-aware zoom)
+  setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
+  getZoomFactor: () => webFrame.getZoomFactor()
 });

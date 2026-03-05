@@ -5,7 +5,7 @@ const Editor = {
   ctx: null,
   currentClip: null,
   originalImage: null,
-  tool: 'select',
+  tool: 'hand',
   color: '#ff3b30',
   lineWidth: 3,
   opacity: 1,
@@ -22,6 +22,11 @@ const Editor = {
   textOverlay: null,
   _historyImageCache: null,
 
+  isPanning: false,
+  panStartX: 0,
+  panStartY: 0,
+  displayScale: 1,
+
   init() {
     this.canvas = document.getElementById('editorCanvas');
     this.ctx = this.canvas.getContext('2d');
@@ -35,13 +40,14 @@ const Editor = {
         const tool = btn.dataset.tool;
         if (tool === 'undo') { this.undo(); return; }
         if (tool === 'redo') { this.redo(); return; }
+        if (tool === 'zoom-in') { this.zoomView(1.2); return; }
+        if (tool === 'zoom-out') { this.zoomView(0.8); return; }
         this.setTool(tool);
       });
     });
 
-    document.getElementById('toolColor').addEventListener('input', (e) => {
-      this.color = e.target.value;
-    });
+    // Color palette
+    this._initColorPalette();
 
     document.getElementById('toolSize').addEventListener('input', (e) => {
       this.lineWidth = parseInt(e.target.value);
@@ -55,17 +61,76 @@ const Editor = {
     }
   },
 
+  _initColorPalette() {
+    const COLORS = [
+      '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#d9d9d9','#ffffff',
+      '#ff0000','#ff4444','#ff6600','#ff9900','#ffcc00','#ffff00','#ccff00','#66ff00',
+      '#00ff00','#00ff66','#00ffcc','#00ffff','#00ccff','#0099ff','#0066ff','#0000ff',
+      '#6600ff','#9900ff','#cc00ff','#ff00ff','#ff0099','#ff0066','#ff3366','#ff6699',
+      '#990000','#994400','#996600','#999900','#669900','#009900','#009966','#006699',
+      '#003399','#000099','#330099','#660099','#990066','#993366','#663333','#996633'
+    ];
+    const palette = document.getElementById('colorPalette');
+    const swatch = document.getElementById('activeColorSwatch');
+    if (!palette || !swatch) return;
+
+    COLORS.forEach(c => {
+      const el = document.createElement('div');
+      el.className = 'cp-swatch';
+      el.style.background = c;
+      if (c === this.color) el.classList.add('active');
+      el.addEventListener('click', () => {
+        this.color = c;
+        swatch.style.background = c;
+        palette.querySelectorAll('.cp-swatch').forEach(s => s.classList.remove('active'));
+        el.classList.add('active');
+        palette.classList.remove('open');
+      });
+      palette.appendChild(el);
+    });
+
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      palette.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (!palette.contains(e.target) && e.target !== swatch) {
+        palette.classList.remove('open');
+      }
+    });
+  },
+
   bindCanvas() {
     this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
     this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
     this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
-    this.canvas.addEventListener('mouseleave', () => { this.isDrawing = false; });
+    this.canvas.addEventListener('mouseleave', () => { this.isDrawing = false; this.isPanning = false; });
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      this.scale = Math.max(0.1, Math.min(5, this.scale * delta));
-      this.redraw();
-    });
+      if (e.ctrlKey) {
+        // Pinch-to-zoom (trackpad) or Ctrl+scroll — reduced sensitivity
+        const factor = e.deltaY > 0 ? 0.95 : 1.05;
+        this.zoomView(factor);
+      } else {
+        // Two-finger pan (trackpad) or regular scroll
+        this.offsetX -= e.deltaX;
+        this.offsetY -= e.deltaY;
+        this._applyViewTransform();
+      }
+    }, { passive: false });
+  },
+
+  zoomView(factor) {
+    this.displayScale = Math.max(0.1, Math.min(5, this.displayScale * factor));
+    this._applyViewTransform();
+  },
+
+  _applyViewTransform() {
+    const w = Math.floor(this.canvas.width * this.displayScale);
+    const h = Math.floor(this.canvas.height * this.displayScale);
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this.canvas.style.transform = `translate(${this.offsetX}px, ${this.offsetY}px)`;
   },
 
   setTool(tool) {
@@ -82,7 +147,6 @@ const Editor = {
 
     // Set cursor
     const cursors = {
-      select: 'default',
       crop: 'crosshair',
       pen: 'crosshair',
       highlighter: 'crosshair',
@@ -90,7 +154,8 @@ const Editor = {
       rectangle: 'crosshair',
       text: 'text',
       blur: 'crosshair',
-      eraser: 'crosshair'
+      eraser: 'crosshair',
+      hand: 'grab'
     };
     this.canvas.style.cursor = cursors[tool] || 'crosshair';
   },
@@ -101,7 +166,11 @@ const Editor = {
     this.drawHistory = [];
     this.historyIndex = -1;
     this.scale = 1;
+    this.displayScale = 1;
+    this.offsetX = 0;
+    this.offsetY = 0;
     this.cropMode = false;
+    this.canvas.style.transform = '';
 
     const img = new Image();
     img.onload = () => {
@@ -115,13 +184,13 @@ const Editor = {
 
       this.canvas.width = img.width;
       this.canvas.height = img.height;
+      this.displayScale = ratio;
       this.canvas.style.width = Math.floor(img.width * ratio) + 'px';
       this.canvas.style.height = Math.floor(img.height * ratio) + 'px';
-      this.scale = ratio;
 
       this.ctx.drawImage(img, 0, 0);
       this.saveToHistory();
-      this.setTool('select');
+      this.setTool('hand');
     };
     img.onerror = () => {
       console.error('Failed to load image:', clip.filePath);
@@ -140,7 +209,13 @@ const Editor = {
   },
 
   onMouseDown(e) {
-    if (this.tool === 'select') return;
+    if (this.tool === 'hand') {
+      this.isPanning = true;
+      this.panStartX = e.clientX - this.offsetX;
+      this.panStartY = e.clientY - this.offsetY;
+      this.canvas.style.cursor = 'grabbing';
+      return;
+    }
     if (this.cropMode && this.tool === 'crop') {
       this.cropStartDrag(e);
       return;
@@ -163,6 +238,12 @@ const Editor = {
   },
 
   onMouseMove(e) {
+    if (this.isPanning && this.tool === 'hand') {
+      this.offsetX = e.clientX - this.panStartX;
+      this.offsetY = e.clientY - this.panStartY;
+      this._applyViewTransform();
+      return;
+    }
     if (!this.isDrawing) return;
 
     if (this.cropMode && this.tool === 'crop') {
@@ -206,6 +287,11 @@ const Editor = {
   },
 
   onMouseUp(e) {
+    if (this.isPanning) {
+      this.isPanning = false;
+      if (this.tool === 'hand') this.canvas.style.cursor = 'grab';
+      return;
+    }
     if (!this.isDrawing) return;
     this.isDrawing = false;
 
@@ -375,11 +461,13 @@ const Editor = {
   },
 
   drawCropOverlay() {
-    this.redraw();
+    // Use sync restore so overlay draws on top of the image immediately
+    this.restoreFromHistorySync();
+    if (!this.cropRect) return;
     const { x, y, w, h } = this.cropRect;
 
-    // Darken outside
-    this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    // Darken outside crop area
+    this.ctx.fillStyle = 'rgba(0,0,0,0.55)';
     this.ctx.fillRect(0, 0, this.canvas.width, y);
     this.ctx.fillRect(0, y + h, this.canvas.width, this.canvas.height - y - h);
     this.ctx.fillRect(0, y, x, h);
@@ -417,7 +505,7 @@ const Editor = {
     this.ctx.beginPath(); this.ctx.moveTo(x + w, y + h/2 - mw); this.ctx.lineTo(x + w, y + h/2 + mw); this.ctx.stroke();
 
     // Grid lines (rule of thirds)
-    this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    this.ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     this.ctx.lineWidth = 1;
     for (let i = 1; i <= 2; i++) {
       this.ctx.beginPath();
@@ -447,7 +535,7 @@ const Editor = {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn-secondary';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => { this.setTool('select'); });
+    cancelBtn.addEventListener('click', () => { this.setTool('hand'); });
 
     bar.appendChild(applyBtn);
     bar.appendChild(cancelBtn);
@@ -550,21 +638,28 @@ const Editor = {
   applyCrop() {
     if (!this.cropRect) return;
     const { x, y, w, h } = this.cropRect;
-    const imageData = this.ctx.getImageData(x, y, w, h);
 
-    this.canvas.width = w;
-    this.canvas.height = h;
+    // Restore clean image (without crop overlay) before extracting
+    this.restoreFromHistorySync();
+
+    const imageData = this.ctx.getImageData(
+      Math.round(x), Math.round(y), Math.round(w), Math.round(h)
+    );
+
+    this.canvas.width = Math.round(w);
+    this.canvas.height = Math.round(h);
 
     const wrapper = this.canvas.parentElement;
     const maxW = wrapper.clientWidth - 40;
     const maxH = wrapper.clientHeight - 40;
     const ratio = Math.min(maxW / w, maxH / h, 1);
+    this.displayScale = ratio;
     this.canvas.style.width = Math.floor(w * ratio) + 'px';
     this.canvas.style.height = Math.floor(h * ratio) + 'px';
 
     this.ctx.putImageData(imageData, 0, 0);
     this.saveToHistory();
-    this.setTool('select');
+    this.setTool('hand');
   },
 
   // ===== History (Undo/Redo) =====
@@ -645,6 +740,10 @@ const Editor = {
   // ===== Save =====
   async saveEdits() {
     if (!this.currentClip) return;
+    // Save version before overwriting (for edit history)
+    try {
+      await ucb.saveClipVersion(this.currentClip.id, this.currentClip.content || null, this.currentClip.filePath ? this.currentClip.filePath.split('?')[0] : null);
+    } catch (e) { console.warn('Failed to save clip version:', e); }
     const dataUrl = this.canvas.toDataURL('image/png');
     const newPath = await ucb.saveEditedClip(this.currentClip.id, dataUrl);
     if (newPath) {

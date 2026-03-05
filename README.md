@@ -1,6 +1,6 @@
 # Universal Clipboard
 
-A screenshot & clipboard manager for Windows, built with Electron. Automatically captures copied text, images, and links. Edit images, organize clips into folders, and share via QR codes or temporary links.
+A screenshot & clipboard manager for Windows, built with Electron. Automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
 
 ## Features
 
@@ -22,21 +22,23 @@ A screenshot & clipboard manager for Windows, built with Electron. Automatically
 
 ### Text Editing
 - **Rich text toolbar** — bold, italic, underline, strikethrough, headings, lists, code, links
+- **Undo/Redo** — per-session undo stack with keyboard shortcuts
 - **Auto-save** — edits saved on blur
+- **Edit history** — automatic version snapshots with configurable auto-cleanup
 
 ### Organization
 - **Folders** — color-coded, pinnable to top bar, drag clips to organize
-- **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Images/Text/Links/Code/Favorites)
+- **Groups** — auto-groups by date (Today/Yesterday/This Week/Older) and type (Favorites/Images/Text/Links/Code/Other)
 - **All Clips** — view with sorting (newest, oldest, A–Z, size)
 - **Search** — full-text with filters: `type:image`, `date:today`, `from:2024-01-01`, `is:fav`
-- **Hidden folder** — passcode-protected with email recovery
-- **Tabs** — open multiple clips, right-click for tab actions
+- **Hidden folder** — protected by Windows Hello (fingerprint, face, or PIN); falls back to custom passcode
+- **Tabs** — open multiple clips, shift-click to multi-select, right-click for tab actions (Close Selected, Close All, Close to Right)
 - **File explorer** — built-in sidebar with quick access to Desktop, Documents, Downloads, Pictures
+- **Dual-panel layout** — editor panel above library panel, both visible simultaneously with resizable split
 
 ### Sharing
-- **QR Code** — temporary QR codes for phone-to-PC transfer
-- **Temporary links** — expiring LAN links (30min default)
-- **Email** — open default mail client with share link
+- **QR Code** — generate QR codes for phone-to-PC transfer (same Wi-Fi required)
+- **Temporary links** — expiring LAN links with copy button (same Wi-Fi required)
 
 ### AI
 - **Ask AI** — works on images and text clips
@@ -46,17 +48,19 @@ A screenshot & clipboard manager for Windows, built with Electron. Automatically
 
 ## Keyboard Shortcuts
 
+Global shortcuts are **configurable in Settings → Keyboard Shortcuts**. Defaults:
+
 | Shortcut | Action |
 |---|---|
 | `PrintScreen` | Full-screen screenshot |
 | `Ctrl+Shift+S` | Selection screenshot |
 | `Ctrl+Shift+V` | Show/hide app |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
+| `Ctrl+Z` | Undo (editor) |
+| `Ctrl+Y` | Redo (editor) |
 | `Ctrl+S` | Save edits |
 | `Ctrl+A` | Select all (in select mode) |
 | `Delete` | Delete selected clip(s) |
-| `Escape` | Close editor / exit select mode |
+| `Escape` | Close editor / exit select mode / clear hotkey field |
 
 ## Setup
 
@@ -66,6 +70,8 @@ npm run dev       # Development (with DevTools)
 npm start         # Production-like run
 npm run build     # Build Windows installer
 ```
+
+> **Note:** Chromium cache warnings on startup (e.g. `cache_util_win.cc`) are harmless and can be ignored.
 
 ## Tech Stack
 

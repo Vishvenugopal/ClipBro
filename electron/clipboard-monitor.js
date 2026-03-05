@@ -12,7 +12,10 @@ class ClipboardMonitor {
     this.lastText = '';
     this.lastImageHash = '';
     this.monitoring = true;
-    this.showNotification = true; // default on, controlled by settings
+    this.saveTextClips = true;
+    this.notifyTextClips = true;
+    this.saveImageClips = true;
+    this.notifyImageClips = true;
   }
 
   start() {
@@ -73,6 +76,7 @@ class ClipboardMonitor {
   }
 
   handleImageClip(pngBuffer, size) {
+    if (!this.saveImageClips) return;
     const id = uuidv4();
     const filePath = path.join(this.clipsDir, `${id}.png`);
     fs.writeFileSync(filePath, pngBuffer);
@@ -93,6 +97,7 @@ class ClipboardMonitor {
   }
 
   handleTextClip(text) {
+    if (!this.saveTextClips) return;
     const id = uuidv4();
     let type = 'text';
     let title = text.substring(0, 100);
@@ -134,13 +139,22 @@ class ClipboardMonitor {
       this.mainWindow.webContents.send('clipboard-update', clip);
     }
 
-    // Windows desktop notification
-    if (this.showNotification && Notification.isSupported()) {
-      const notif = new Notification({
+    // Per-type desktop notifications
+    const isImage = clip.type === 'image';
+    const shouldNotify = isImage ? this.notifyImageClips : this.notifyTextClips;
+    if (shouldNotify && Notification.isSupported()) {
+      const opts = {
         title: 'Universal Clipboard',
-        body: clip.type === 'image' ? `Image captured (${clip.title})` : `Clip captured: ${(clip.title || '').substring(0, 60)}`,
+        body: isImage ? `Image captured (${clip.title})` : `Clip captured: ${(clip.title || '').substring(0, 60)}`,
         silent: true
-      });
+      };
+      // Show image thumbnail in notification if available
+      if (isImage && clip.filePath && fs.existsSync(clip.filePath)) {
+        try {
+          opts.icon = nativeImage.createFromPath(clip.filePath);
+        } catch (e) { /* ignore */ }
+      }
+      const notif = new Notification(opts);
       notif.show();
     }
 

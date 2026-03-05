@@ -50,6 +50,7 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: false,
+      backgroundThrottling: true,
     }
   });
 
@@ -74,6 +75,18 @@ function createMainWindow() {
     if (!isQuitting) {
       e.preventDefault();
       mainWindow.hide();
+    }
+  });
+
+  // Reduce memory when hidden
+  mainWindow.on('hide', () => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('window-visibility', false);
+    }
+  });
+  mainWindow.on('show', () => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('window-visibility', true);
     }
   });
 
@@ -151,31 +164,61 @@ function importFromClipboard() {
   }
 }
 
+const DEFAULT_HOTKEYS = {
+  toggleApp: 'CommandOrControl+Shift+V',
+  screenshot: 'PrintScreen',
+  screenshotSelection: 'CommandOrControl+Shift+S'
+};
+
+function getHotkeys() {
+  try {
+    const settings = db.getSettings();
+    return {
+      toggleApp: settings.hotkeyToggleApp || DEFAULT_HOTKEYS.toggleApp,
+      screenshot: settings.hotkeyScreenshot || DEFAULT_HOTKEYS.screenshot,
+      screenshotSelection: settings.hotkeyScreenshotSelection || DEFAULT_HOTKEYS.screenshotSelection
+    };
+  } catch { return { ...DEFAULT_HOTKEYS }; }
+}
+
 function registerShortcuts() {
-  // PrintScreen - take screenshot
-  globalShortcut.register('PrintScreen', async () => {
-    await takeScreenshot();
-  });
+  globalShortcut.unregisterAll();
+  const hotkeys = getHotkeys();
 
-  // Ctrl+Shift+S - screenshot with selection
-  globalShortcut.register('CommandOrControl+Shift+S', async () => {
-    const capture = new ScreenshotCapture(mainWindow, db, CLIPS_DIR);
-    await capture.captureWithSelection();
-  });
-
-  // Ctrl+Shift+V - toggle app visibility
-  globalShortcut.register('CommandOrControl+Shift+V', () => {
-    if (mainWindow && mainWindow.isVisible() && mainWindow.isFocused()) {
-      mainWindow.hide();
-    } else {
-      showMainWindow();
+  try {
+    if (hotkeys.screenshot) {
+      globalShortcut.register(hotkeys.screenshot, async () => {
+        await takeScreenshot();
+      });
     }
-  });
+  } catch (e) { console.error('Failed to register screenshot hotkey:', e.message); }
+
+  try {
+    if (hotkeys.screenshotSelection) {
+      globalShortcut.register(hotkeys.screenshotSelection, async () => {
+        const capture = new ScreenshotCapture(mainWindow, db, CLIPS_DIR);
+        await capture.captureWithSelection();
+      });
+    }
+  } catch (e) { console.error('Failed to register screenshot selection hotkey:', e.message); }
+
+  try {
+    if (hotkeys.toggleApp) {
+      globalShortcut.register(hotkeys.toggleApp, () => {
+        if (mainWindow && mainWindow.isVisible() && mainWindow.isFocused()) {
+          mainWindow.hide();
+        } else {
+          showMainWindow();
+        }
+      });
+    }
+  } catch (e) { console.error('Failed to register toggle app hotkey:', e.message); }
 }
 
 function setupIPC() {
   // Window controls
   ipcMain.on('window-minimize', () => mainWindow?.minimize());
+  ipcMain.on('window-show', () => { mainWindow?.show(); mainWindow?.focus(); });
   ipcMain.on('window-maximize', () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize();
     else mainWindow?.maximize();
@@ -308,6 +351,10 @@ function setupIPC() {
     return aiEngine.analyzeImage(clipId, prompt);
   });
 
+  ipcMain.handle('ai-analyze-text', async (_, clipId, prompt) => {
+    return aiEngine.analyzeText(clipId, prompt);
+  });
+
   ipcMain.handle('ai-search-web', async (_, clipId, useAI) => {
     return aiEngine.searchWeb(clipId, useAI);
   });
@@ -423,12 +470,28 @@ function setupIPC() {
       app.setLoginItemSettings({ openAtLogin: settings.openOnStartup === 'true' });
     }
 
-    // Apply notification setting to clipboard monitor
+    // Apply per-type save/notify settings to clipboard monitor
     if (clipboardMonitor) {
-      clipboardMonitor.showNotification = settings.clipboardNotification !== 'false';
+      clipboardMonitor.saveTextClips = settings.saveTextClips !== 'false';
+      clipboardMonitor.notifyTextClips = settings.notifyTextClips !== 'false';
+      clipboardMonitor.saveImageClips = settings.saveImageClips !== 'false';
+      clipboardMonitor.notifyImageClips = settings.notifyImageClips !== 'false';
+    }
+
+    // Re-register shortcuts if hotkeys changed
+    if (settings.hotkeyToggleApp !== undefined || settings.hotkeyScreenshot !== undefined || settings.hotkeyScreenshotSelection !== undefined) {
+      registerShortcuts();
     }
 
     return true;
+  });
+
+  ipcMain.handle('get-hotkeys', async () => {
+    return getHotkeys();
+  });
+
+  ipcMain.handle('get-default-hotkeys', async () => {
+    return { ...DEFAULT_HOTKEYS };
   });
 
   // Choose directory
@@ -457,6 +520,83 @@ function setupIPC() {
     } catch (e) {
       console.error('Clear all clips error:', e);
       return false;
+    }
+  });
+
+  // Move data directory (copy everything to new location)
+  ipcMain.handle('move-data-directory', async (_, newDir) => {
+    try {
+      const newClipsDir = path.join(newDir, 'clips');
+      const newHiddenDir = path.join(newDir, '.hidden');
+      const newThumbDir = path.join(newDir, 'thumbnails');
+      [newDir, newClipsDir, newHiddenDir, newThumbDir].forEach(d => {
+        if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+      });
+      // Copy clips
+      if (fs.existsSync(CLIPS_DIR)) {
+        for (const f of fs.readdirSync(CLIPS_DIR)) {
+          fs.copyFileSync(path.join(CLIPS_DIR, f), path.join(newClipsDir, f));
+        }
+      }
+      // Copy hidden
+      if (fs.existsSync(HIDDEN_DIR)) {
+        for (const f of fs.readdirSync(HIDDEN_DIR)) {
+          fs.copyFileSync(path.join(HIDDEN_DIR, f), path.join(newHiddenDir, f));
+        }
+      }
+      // Copy thumbnails
+      if (fs.existsSync(THUMBNAILS_DIR)) {
+        for (const f of fs.readdirSync(THUMBNAILS_DIR)) {
+          fs.copyFileSync(path.join(THUMBNAILS_DIR, f), path.join(newThumbDir, f));
+        }
+      }
+      // Copy database
+      const dbPath = path.join(DATA_DIR, 'clipboard.db');
+      if (fs.existsSync(dbPath)) {
+        fs.copyFileSync(dbPath, path.join(newDir, 'clipboard.db'));
+      }
+      // Update clip file paths in new DB to point to new location
+      const clips = db.getClips();
+      for (const clip of clips) {
+        if (clip.filePath && clip.filePath.startsWith(CLIPS_DIR)) {
+          const newPath = clip.filePath.replace(CLIPS_DIR, newClipsDir);
+          db.updateClip(clip.id, { filePath: newPath });
+        }
+      }
+      return { success: true };
+    } catch (e) {
+      console.error('move-data-directory error:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Windows Hello / device credential authentication
+  ipcMain.handle('authenticate-device', async () => {
+    try {
+      // Temporarily lower the window so the Windows credential popup can appear on top
+      if (mainWindow) {
+        mainWindow.setAlwaysOnTop(false);
+        mainWindow.blur();
+      }
+      // Use Electron's built-in systemPreferences for Windows Hello
+      const { systemPreferences } = require('electron');
+      if (systemPreferences.canPromptTouchID && systemPreferences.canPromptTouchID()) {
+        await systemPreferences.promptTouchID('Access hidden folder');
+        if (mainWindow) mainWindow.focus();
+        return { success: true };
+      }
+      // Fallback: use Windows credential prompt via PowerShell
+      const { execSync } = require('child_process');
+      const result = execSync(
+        'powershell -Command "[Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync(\\"Universal Clipboard wants to access your hidden folder\\").AsTask().Result"',
+        { encoding: 'utf-8', timeout: 60000 }
+      ).trim();
+      if (mainWindow) mainWindow.focus();
+      return { success: result === 'Verified' };
+    } catch (e) {
+      console.error('Device auth error:', e);
+      if (mainWindow) mainWindow.focus();
+      return { success: false, error: e.message };
     }
   });
 
@@ -502,6 +642,16 @@ function setupIPC() {
     } catch (e) {
       console.error('list-directory error:', e.message);
       return [];
+    }
+  });
+
+  // Read text file contents
+  ipcMain.handle('read-text-file', async (_, filePath) => {
+    try {
+      return fs.readFileSync(filePath, 'utf-8');
+    } catch (e) {
+      console.error('read-text-file error:', e.message);
+      return '';
     }
   });
 

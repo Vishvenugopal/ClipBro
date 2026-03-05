@@ -117,9 +117,18 @@ const Dialogs = {
 
     document.querySelectorAll('[data-folder-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        const oldFolderId = clip.folderId || null;
         await ucb.moveClipToFolder(clip.id, btn.dataset.folderId);
+        const folder = folders.find(f => f.id === btn.dataset.folderId);
+        App.pushUndo({ type: 'move', clipId: clip.id, oldFolderId, newFolderId: btn.dataset.folderId, folderName: folder ? folder.name : 'folder' });
+        await App.loadData();
+        App.renderPinnedFolders();
+        App.renderClipGrid();
+        App.renderLeftSidebar();
+        App.renderLibraryTabs();
+        App.refreshExplorer();
         this.close();
-        App.toast('Moved to folder', 'success');
+        App.toastWithUndo(`Moved to ${folder ? folder.name : 'folder'}`);
       });
     });
   },
@@ -156,14 +165,42 @@ const Dialogs = {
     });
   },
 
-  // ===== Passcode Dialog =====
-  showPasscodeDialog() {
+  // ===== Hidden Folder Dialog (Windows Hello / device security) =====
+  async showPasscodeDialog() {
+    // Try Windows Hello / device authentication first
     this.show(`
       <div class="modal-header">
         <h2>Hidden Folder</h2>
         <button class="modal-close" onclick="Dialogs.close()">&times;</button>
       </div>
-      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:12px">Enter your passcode to access hidden clips.</p>
+      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:12px">Verifying your identity using Windows Hello or your device PIN...</p>
+      <div style="text-align:center;padding:24px"><div class="spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent-green);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto"></div></div>
+    `);
+
+    try {
+      const result = await ucb.authenticateDevice();
+      if (result && result.success) {
+        // Authenticated — use a fixed internal passcode for hidden clips
+        const clips = await ucb.getHiddenClips('__device_auth__');
+        this.close();
+        App.clips = clips || [];
+        App.activeView = 'hidden';
+        document.getElementById('clipGrid').classList.remove('hidden');
+        document.getElementById('emptyState').classList.add('hidden');
+        App.renderClipGrid();
+        return;
+      }
+    } catch (e) {
+      console.error('Device auth error:', e);
+    }
+
+    // Fallback to passcode if Windows Hello is unavailable
+    this.show(`
+      <div class="modal-header">
+        <h2>Hidden Folder</h2>
+        <button class="modal-close" onclick="Dialogs.close()">&times;</button>
+      </div>
+      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:12px">Windows Hello unavailable. Enter your passcode to access hidden clips.</p>
       <div class="form-group">
         <input type="password" class="form-input" id="accessPasscode" placeholder="Enter passcode" maxlength="6" autofocus />
       </div>
@@ -406,7 +443,7 @@ const Dialogs = {
 
       const result = isImage
         ? await ucb.aiAnalyzeImage(clip.id, prompt)
-        : await ucb.aiAnalyzeImage(clip.id, prompt);
+        : await ucb.aiAnalyzeText(clip.id, prompt);
 
       if (result.error) {
         document.getElementById('aiResultArea').innerHTML = `<div class="ai-response" style="border-color:var(--accent-red)">${result.error}</div>`;

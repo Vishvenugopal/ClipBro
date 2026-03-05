@@ -15,16 +15,25 @@ const App = {
   allClips: [],
   undoStack: [],
   redoStack: [],
+  selectedTabs: new Set(),
+  _lastClickedTabId: null,
   currentView: 'all',
   currentViewLabel: '',
   currentSort: 'newest',
   _ignoreClipboard: false,
+
+  // Library tabs state
+  libraryTabs: [{ id: 'all', label: 'All Clips', filter: null }],
+  activeLibTab: 'all',
 
   // File explorer state
   explorerPath: '',
   explorerHistory: [],
   explorerHomePath: '',
   quickAccessPaths: {},
+  _explorerSelectedPaths: new Set(),
+  _explorerSortedEntries: [],
+  _explorerLastClickIdx: -1,
 
   async init() {
     try {
@@ -36,8 +45,14 @@ const App = {
       this.renderPinnedFolders();
       this.renderLeftSidebar();
       this.renderClipGrid();
+      this.renderLibraryTabs();
+      this.hideSortBarNav();
       console.log('[App] UI rendered, initializing file explorer...');
       await this.initFileExplorer();
+      // Apply saved zoom (default 100%) using Electron webFrame
+      const savedSettings = await ucb.getSettings() || {};
+      const savedScale = parseInt(savedSettings.uiScale) || 100;
+      this._setZoom(savedScale, true);
       console.log('[App] Init complete');
     } catch (e) {
       console.error('[App] Init failed:', e);
@@ -69,16 +84,16 @@ const App = {
     document.getElementById('titleMaxBtn').addEventListener('click', () => ucb.maximize());
     document.getElementById('titleCloseBtn').addEventListener('click', () => ucb.close());
 
-    // Search
+    // Search (left sidebar - filters recent clips list only)
     const searchInput = document.getElementById('searchInput');
     let searchTimeout;
     searchInput.addEventListener('input', (e) => {
       clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => this.handleSearch(e.target.value), 300);
+      searchTimeout = setTimeout(() => this.handleRecentSearch(e.target.value), 300);
     });
 
     // Tab bar actions
-    document.getElementById('selectModeBtn').addEventListener('click', () => this.toggleSelectMode());
+    document.getElementById('selectModeBtnSort').addEventListener('click', () => this.toggleSelectMode());
     document.getElementById('importBtn').addEventListener('click', () => ucb.pasteFromClipboard());
     document.getElementById('importFileBtn').addEventListener('click', () => this.importFiles());
     document.getElementById('screenshotBtn').addEventListener('click', () => this.takeScreenshot());
@@ -111,7 +126,43 @@ const App = {
 
     // Bottom buttons
     document.getElementById('hiddenFolderBtn').addEventListener('click', () => Dialogs.showPasscodeDialog());
-    document.getElementById('settingsBtn').addEventListener('click', () => this.showSettings());
+    document.getElementById('settingsBtn').addEventListener('click', () => this.toggleSettings());
+    document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
+    document.getElementById('settingsOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'settingsOverlay') this.closeSettings();
+    });
+
+    // Library search
+    const libSearchInput = document.getElementById('librarySearchInput');
+    let libSearchTimeout;
+    libSearchInput.addEventListener('input', (e) => {
+      clearTimeout(libSearchTimeout);
+      libSearchTimeout = setTimeout(() => this.handleLibrarySearch(e.target.value), 300);
+    });
+
+    // Search filter buttons
+    document.getElementById('recentFilterBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleSearchFilterDropdown('recentFilterBtn', 'searchInput', 'recent');
+    });
+    document.getElementById('libraryFilterBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleSearchFilterDropdown('libraryFilterBtn', 'librarySearchInput', 'library');
+    });
+
+    // Library thumbnail scale
+    document.getElementById('libraryThumbScale').addEventListener('input', (e) => {
+      this._libGridMode = parseInt(e.target.value);
+      this._applyLibGridMode();
+    });
+
+    // Explorer search
+    const explorerSearchInput = document.getElementById('explorerSearchInput');
+    let explorerSearchTimeout;
+    explorerSearchInput.addEventListener('input', (e) => {
+      clearTimeout(explorerSearchTimeout);
+      explorerSearchTimeout = setTimeout(() => this.handleExplorerSearch(e.target.value), 300);
+    });
 
     // Sort bar
     document.getElementById('sortBackBtn').addEventListener('click', () => this.showAllClips());
@@ -125,19 +176,36 @@ const App = {
     document.getElementById('edCopyBtn').addEventListener('click', () => this.copyActiveClip());
     document.getElementById('edSaveBtn').addEventListener('click', () => { if (this.activeClip?.type === 'image') Editor.saveEdits(); });
     document.getElementById('edSaveAsBtn').addEventListener('click', () => this.saveActiveClipAs());
-    document.getElementById('edShareBtn').addEventListener('click', () => Dialogs.showShareDialog(this.activeClip));
+    document.getElementById('edQrBtn').addEventListener('click', () => this.showQrCode());
+    document.getElementById('edLinkBtn').addEventListener('click', () => this.generateShareLink());
     document.getElementById('edOcrBtn').addEventListener('click', () => this.extractText());
+    document.getElementById('edHistoryBtn').addEventListener('click', () => this.showClipHistory());
     document.getElementById('edAiBtn').addEventListener('click', () => Dialogs.showAIDialog(this.activeClip));
     document.getElementById('edDeleteBtn').addEventListener('click', () => this.deleteActiveClip());
 
-    // Bulk delete
+    // Bulk actions
     document.getElementById('bulkDeleteBtn').addEventListener('click', () => this.bulkDeleteSelected());
+    document.getElementById('bulkFavBtn').addEventListener('click', () => this.bulkToggleFavorite());
+    document.getElementById('bulkMoveBtn').addEventListener('click', () => this.bulkMoveToFolder());
+    document.getElementById('bulkCancelBtn').addEventListener('click', () => this.toggleSelectMode());
 
     // File explorer nav
     document.getElementById('explorerHomeBtn').addEventListener('click', () => this.navigateExplorer(this.explorerHomePath));
     document.getElementById('explorerBackBtn').addEventListener('click', () => this.explorerGoBack());
+    document.getElementById('explorerForwardBtn').addEventListener('click', () => this.explorerGoForward());
     document.getElementById('explorerOpenExternalBtn').addEventListener('click', () => {
       if (this.explorerPath) ucb.openInExplorer(this.explorerPath);
+    });
+    document.getElementById('explorerThumbScale').addEventListener('input', (e) => {
+      this._explorerThumbMode = parseInt(e.target.value);
+      if (this.explorerPath) ucb.listDirectory(this.explorerPath).then(entries => this.renderExplorerFiles(entries));
+    });
+    document.getElementById('explorerSortSelect').addEventListener('change', (e) => {
+      this._explorerSortMode = e.target.value;
+      if (this._lastExplorerEntries) this.renderExplorerFiles(this._lastExplorerEntries);
+    });
+    document.getElementById('explorerFilterBtn').addEventListener('click', () => {
+      this._toggleSearchFilterDropdown('explorerFilterBtn', 'explorerSearchInput', 'explorer');
     });
 
     // Keyboard
@@ -275,15 +343,15 @@ const App = {
 
   bindPanelResize() {
     const handle = document.getElementById('panelResizeHandle');
-    const topPanel = document.getElementById('topPanel');
-    const bottomPanel = document.getElementById('bottomPanel');
-    const center = document.getElementById('centerPanel');
+    // In DOM order: bottomPanel (editor) is first, then resize handle, then topPanel (library)
+    const editorPanel = document.getElementById('bottomPanel');
+    const libraryPanel = document.getElementById('topPanel');
     if (!handle) return;
-    let isResizing = false, startY, startTopH, startBotH;
+    let isResizing = false, startY, startEditorH, startLibH;
     handle.addEventListener('mousedown', (e) => {
-      if (bottomPanel.classList.contains('hidden')) return;
+      if (editorPanel.classList.contains('hidden')) return;
       isResizing = true; startY = e.clientY;
-      startTopH = topPanel.offsetHeight; startBotH = bottomPanel.offsetHeight;
+      startEditorH = editorPanel.offsetHeight; startLibH = libraryPanel.offsetHeight;
       handle.classList.add('active');
       document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
@@ -292,11 +360,12 @@ const App = {
     document.addEventListener('mousemove', (e) => {
       if (!isResizing) return;
       const diff = e.clientY - startY;
-      const totalH = startTopH + startBotH;
-      const newTopH = Math.max(100, Math.min(totalH - 150, startTopH + diff));
-      const newBotH = totalH - newTopH;
-      topPanel.style.flex = `0 0 ${newTopH}px`;
-      bottomPanel.style.flex = `0 0 ${newBotH}px`;
+      const totalH = startEditorH + startLibH;
+      // Drag down = grow editor (above handle), shrink library (below handle)
+      const newEditorH = Math.max(150, Math.min(totalH - 100, startEditorH + diff));
+      const newLibH = totalH - newEditorH;
+      editorPanel.style.flex = `0 0 ${newEditorH}px`;
+      libraryPanel.style.flex = `0 0 ${newLibH}px`;
     });
     document.addEventListener('mouseup', () => {
       if (isResizing) { isResizing = false; handle.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
@@ -332,13 +401,31 @@ const App = {
     ucb.onNavigate((section) => {
       if (section === 'settings') this.showSettings();
     });
+
+    // Memory optimization: reduce work when window is hidden
+    ucb.onWindowVisibility((visible) => {
+      this._windowVisible = visible;
+      if (!visible) {
+        // Clear thumbnail image caches to free memory
+        document.querySelectorAll('.clip-card-thumb img, .recent-clip-thumb img').forEach(img => {
+          img.dataset.src = img.src;
+          img.src = '';
+        });
+      } else {
+        // Restore thumbnails when window becomes visible again
+        document.querySelectorAll('.clip-card-thumb img[data-src], .recent-clip-thumb img[data-src]').forEach(img => {
+          if (img.dataset.src) { img.src = img.dataset.src; delete img.dataset.src; }
+        });
+      }
+    });
   },
 
   // ===== Select Mode =====
   toggleSelectMode() {
     this.selectMode = !this.selectMode;
     this.selectedClips.clear();
-    document.getElementById('selectModeBtn').classList.toggle('active', this.selectMode);
+    const sortBtn = document.getElementById('selectModeBtnSort');
+    if (sortBtn) sortBtn.classList.toggle('active', this.selectMode);
     this.renderClipGrid();
     this.updateBulkUI();
   },
@@ -372,6 +459,50 @@ const App = {
     this.toast(`Deleted ${count} clip(s)`, 'info');
   },
 
+  async bulkMoveToFolder() {
+    if (this.selectedClips.size === 0) return;
+    // Show a quick folder picker using context-menu style dropdown
+    const folders = this.folders.filter(f => f.path || f.id);
+    if (folders.length === 0) { this.toast('No folders available', 'info'); return; }
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    const bar = document.getElementById('bulkBar');
+    const rect = bar.getBoundingClientRect();
+    menu.style.left = rect.left + 'px';
+    menu.style.top = (rect.top - folders.length * 30 - 10) + 'px';
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:4px 10px;font-size:10px;color:var(--text-muted);font-weight:600';
+    header.textContent = 'Move to folder:';
+    menu.appendChild(header);
+    folders.forEach(folder => {
+      const btn = document.createElement('button');
+      btn.className = 'context-menu-item';
+      btn.textContent = folder.name;
+      btn.addEventListener('click', async () => {
+        this.dismissContextMenu();
+        const ids = [...this.selectedClips];
+        const undoEntries = [];
+        for (const clipId of ids) {
+          const clip = this.allClips.find(c => c.id === clipId);
+          undoEntries.push({ clipId, oldFolderId: clip ? clip.folderId : null });
+          await ucb.moveClipToFolder(clipId, folder.id);
+        }
+        this.pushUndo({ type: 'bulkMove', entries: undoEntries, newFolderId: folder.id, folderName: folder.name });
+        await this.loadData();
+        this.renderPinnedFolders();
+        this.selectedClips.clear();
+        this.renderClipGrid();
+        this.renderLibraryTabs();
+        this.refreshExplorer();
+        this.updateBulkUI();
+        this.toastWithUndo(`Moved ${ids.length} clip(s) to ${folder.name}`);
+      });
+      menu.appendChild(btn);
+    });
+    document.body.appendChild(menu);
+    this.contextMenu = menu;
+  },
+
   // ===== Pinned Folders (TOP BAR - large, animated, peek thumbnails) =====
   renderPinnedFolders() {
     const container = document.getElementById('pinnedFoldersList');
@@ -390,6 +521,22 @@ const App = {
     addBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>';
     addBtn.addEventListener('click', () => Dialogs.showNewFolderDialog());
     container.appendChild(addBtn);
+    // Update scroll fades
+    this._updatePinnedFades();
+  },
+
+  _updatePinnedFades() {
+    const list = document.getElementById('pinnedFoldersList');
+    const fl = document.getElementById('pinnedFadeLeft');
+    const fr = document.getElementById('pinnedFadeRight');
+    if (!list || !fl || !fr) return;
+    const update = () => {
+      fl.classList.toggle('visible', list.scrollLeft > 4);
+      fr.classList.toggle('visible', list.scrollLeft < list.scrollWidth - list.clientWidth - 4);
+    };
+    update();
+    list.removeEventListener('scroll', update);
+    list.addEventListener('scroll', update);
   },
 
   _renderPinnedCard(container, folder) {
@@ -405,10 +552,8 @@ const App = {
     // Papers behind the folder (recent clip thumbnails peeking out)
     const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
     let papersHtml = '';
-    paperClips.forEach((c, i) => {
-      const offset = (i - 1) * 6;
-      const rot = (i - 1) * 3;
-      papersHtml += `<div class="folder-paper" style="transform:rotate(${rot}deg) translateX(${offset}px)"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
+    paperClips.forEach(c => {
+      papersHtml += `<div class="folder-paper"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
     });
     if (paperClips.length === 0 && count > 0) {
       papersHtml = '<div class="folder-paper"><div class="folder-paper-text">TXT</div></div>';
@@ -449,8 +594,10 @@ const App = {
     card.addEventListener('click', () => {
       if (folder.path) {
         this.navigateExplorer(folder.path);
+        this.openFolderInLibrary(folder.path, folder.name);
+      } else {
+        this.loadFolderView(folder);
       }
-      this.loadFolderView(folder);
     });
     card.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showFolderContextMenu(e, folder); });
 
@@ -461,11 +608,16 @@ const App = {
       e.preventDefault(); card.classList.remove('drag-over');
       const clipId = e.dataTransfer.getData('text/plain');
       if (clipId && this._internalDrag) {
+        const clip = this.allClips.find(c => c.id === clipId);
+        const oldFolderId = clip ? clip.folderId : null;
         await ucb.moveClipToFolder(clipId, folder.id);
+        this.pushUndo({ type: 'move', clipId, oldFolderId, newFolderId: folder.id, folderName: folder.name });
         await this.loadData();
         this.renderPinnedFolders();
         this.renderClipGrid();
-        this.toast(`Moved to ${folder.name}`, 'success');
+        this.renderLibraryTabs();
+        this.refreshExplorer();
+        this.toastWithUndo(`Moved to ${folder.name}`);
       }
     });
 
@@ -481,26 +633,160 @@ const App = {
   },
 
   showAllClips() {
+    this.activeLibTab = 'all';
     this.clips = [...this.allClips];
     this.currentView = 'all';
     this.currentViewLabel = '';
-    document.getElementById('sortBar').style.display = 'none';
+    this.hideSortBarNav();
     this.renderClipGrid();
+    this.renderLibraryTabs();
     document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
   },
 
   showFilteredView(label, filteredClips) {
+    // Check if a library tab already exists for this label
+    let tab = this.libraryTabs.find(t => t.label === label);
+    if (!tab) {
+      tab = { id: 'lib_' + Date.now(), label, filter: label };
+      this.libraryTabs.push(tab);
+    }
+    this.activeLibTab = tab.id;
     this.clips = filteredClips;
     this.currentView = 'filtered';
     this.currentViewLabel = label;
     this.showSortBar(label);
     this.applySortAndRender();
+    this.renderLibraryTabs();
+  },
+
+  renderLibraryTabs() {
+    const container = document.getElementById('libraryTabs');
+    container.innerHTML = '';
+    this.libraryTabs.forEach(tab => {
+      const el = document.createElement('div');
+      el.className = 'library-tab' + (tab.id === this.activeLibTab ? ' active' : '');
+      el.dataset.libTab = tab.id;
+      const closable = tab.id !== 'all';
+      const libTabIcons = {
+        'All Clips': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg>',
+        'Favorites': '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-yellow)" stroke="var(--accent-yellow)" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+        'Images': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+        'Text': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+        'Links': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>',
+        'Code': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+      };
+      const tabIcon = libTabIcons[tab.label] || (tab.folderPath ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>' : '');
+      el.innerHTML = `${tabIcon}<span>${this.escapeHtml(tab.label)}</span>${closable ? '<button class="lib-tab-close">&times;</button>' : ''}`;
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.lib-tab-close')) {
+          this.closeLibraryTab(tab.id);
+          return;
+        }
+        this.switchLibraryTab(tab.id);
+      });
+      container.appendChild(el);
+    });
+    this._updateLibTabFades();
+
+    // Allow drag-drop of folders onto the library tab bar
+    container.addEventListener('dragover', (e) => {
+      if (e.dataTransfer.types.includes('text/x-folder-path')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'link';
+        container.style.outline = '2px dashed var(--accent-green)';
+        container.style.outlineOffset = '-2px';
+      }
+    });
+    container.addEventListener('dragleave', () => {
+      container.style.outline = '';
+      container.style.outlineOffset = '';
+    });
+    container.addEventListener('drop', (e) => {
+      container.style.outline = '';
+      container.style.outlineOffset = '';
+      const folderPath = e.dataTransfer.getData('text/x-folder-path');
+      if (folderPath) {
+        e.preventDefault();
+        const folderName = this._dragFolderName || folderPath.replace(/\\/g, '/').split('/').pop();
+        this.openFolderInLibrary(folderPath, folderName);
+      }
+    });
+  },
+
+  switchLibraryTab(tabId) {
+    const tab = this.libraryTabs.find(t => t.id === tabId);
+    if (!tab) return;
+    this.activeLibTab = tabId;
+    if (tab.id === 'all') {
+      this.showAllClips();
+    } else {
+      // Re-filter based on the tab's label
+      this._applyLibTabFilter(tab);
+    }
+  },
+
+  closeLibraryTab(tabId) {
+    this.libraryTabs = this.libraryTabs.filter(t => t.id !== tabId);
+    if (this.activeLibTab === tabId) {
+      this.activeLibTab = 'all';
+      this.showAllClips();
+    }
+    this.renderLibraryTabs();
+  },
+
+  _applyLibTabFilter(tab) {
+    const label = tab.label;
+    // Re-derive the filtered clips based on the label
+    const typeMap = { 'Images': 'image', 'Text': 'text', 'Links': 'link', 'Code': 'code' };
+    if (label === 'Favorites') {
+      this.clips = this.allClips.filter(c => c.favorite);
+    } else if (typeMap[label]) {
+      this.clips = this.allClips.filter(c => c.type === typeMap[label]);
+    } else if (label === 'Other') {
+      this.clips = this.allClips.filter(c => !['image','text','link','code'].includes(c.type));
+    } else if (tab.folderPath) {
+      // Folder-based tab: show clips from this folder
+      const folder = this.folders.find(f => f.path === tab.folderPath);
+      if (folder) {
+        this.clips = this.allClips.filter(c => c.folderId === folder.id);
+      } else {
+        this.clips = [];
+      }
+    } else {
+      // Date groups or custom — fallback to all
+      this.clips = [...this.allClips];
+    }
+    this.currentView = 'filtered';
+    this.currentViewLabel = label;
+    this.showSortBar(label);
+    this.applySortAndRender();
+    this.renderLibraryTabs();
+  },
+
+  openFolderInLibrary(folderPath, folderName) {
+    const name = folderName || folderPath.replace(/\\/g, '/').split('/').pop();
+    // Check if tab already exists for this path
+    const existing = this.libraryTabs.find(t => t.folderPath === folderPath);
+    if (existing) {
+      this.switchLibraryTab(existing.id);
+      return;
+    }
+    const tabId = 'folder_' + Date.now();
+    this.libraryTabs.push({ id: tabId, label: name, filter: null, folderPath });
+    this.activeLibTab = tabId;
+    this._applyLibTabFilter({ id: tabId, label: name, folderPath });
   },
 
   showSortBar(label) {
-    const bar = document.getElementById('sortBar');
-    bar.style.display = 'flex';
+    document.getElementById('sortBackBtn').style.display = '';
     document.getElementById('sortTitle').textContent = label;
+    document.getElementById('sortTitle').style.display = '';
+  },
+
+  hideSortBarNav() {
+    document.getElementById('sortBackBtn').style.display = 'none';
+    document.getElementById('sortTitle').textContent = '';
+    document.getElementById('sortTitle').style.display = 'none';
   },
 
   applySortAndRender() {
@@ -525,12 +811,19 @@ const App = {
   },
 
   renderRecentClips() {
-    const list = document.getElementById('recentClipsList');
-    const countEl = document.getElementById('recentClipCount');
-    list.innerHTML = '';
-    countEl.textContent = this.clips.length;
+    const imgList = document.getElementById('recentImagesList');
+    const txtList = document.getElementById('recentTextsList');
+    const imgCount = document.getElementById('recentImageCount');
+    const txtCount = document.getElementById('recentTextCount');
+    imgList.innerHTML = '';
+    txtList.innerHTML = '';
 
-    this.allClips.forEach(clip => {
+    const imageClips = this.allClips.filter(c => c.type === 'image');
+    const textClips = this.allClips.filter(c => c.type !== 'image');
+    imgCount.textContent = imageClips.length;
+    txtCount.textContent = textClips.length;
+
+    const renderItem = (clip, list) => {
       const item = document.createElement('div');
       item.className = 'recent-clip-item';
       if (this.activeClip && this.activeClip.id === clip.id) item.classList.add('active');
@@ -549,7 +842,7 @@ const App = {
           <div class="rc-meta">${this.formatTime(clip.createdAt)}</div>
         </div>
         <button class="recent-clip-delete" data-clip-id="${clip.id}" title="Delete">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
         </button>
       `;
 
@@ -563,8 +856,27 @@ const App = {
         this.openEditor(clip);
       });
       item.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showClipContextMenu(e, clip); });
+
+      // Make recent clips draggable
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        this._internalDrag = true;
+        this._dragClipId = clip.id;
+        e.dataTransfer.setData('text/plain', clip.id);
+        e.dataTransfer.effectAllowed = 'move';
+        item.style.opacity = '0.5';
+      });
+      item.addEventListener('dragend', () => {
+        this._internalDrag = false;
+        this._dragClipId = null;
+        item.style.opacity = '';
+      });
+
       list.appendChild(item);
-    });
+    };
+
+    imageClips.slice(0, 20).forEach(c => renderItem(c, imgList));
+    textClips.slice(0, 20).forEach(c => renderItem(c, txtList));
   },
 
   renderDateGroups() {
@@ -609,7 +921,7 @@ const App = {
     const allItem = document.createElement('div');
     allItem.className = 'group-item group-item-all';
     allItem.innerHTML = `
-      <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect x="13" y="2" width="9" height="9" rx="1.5"/><rect x="2" y="13" width="9" height="9" rx="1.5"/><rect x="13" y="13" width="9" height="9" rx="1.5"/></svg></div>
+      <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg></div>
       <span class="group-item-name">All Clips</span>
       <span class="group-item-count">${this.allClips.length}</span>
     `;
@@ -659,9 +971,6 @@ const App = {
   renderClipGrid() {
     const grid = document.getElementById('clipGrid');
     const empty = document.getElementById('emptyState');
-    const settings = document.getElementById('settingsView');
-
-    settings.classList.add('hidden');
 
     if (this.clips.length === 0) {
       grid.classList.add('hidden');
@@ -673,7 +982,17 @@ const App = {
     grid.classList.remove('hidden');
     grid.innerHTML = '';
 
+    let lastDateLabel = '';
     this.clips.forEach((clip, index) => {
+      // Insert date separator if label changed
+      const dateLabel = this._getDateLabel(clip.createdAt);
+      if (dateLabel !== lastDateLabel) {
+        lastDateLabel = dateLabel;
+        const sep = document.createElement('div');
+        sep.className = 'clip-date-separator';
+        sep.textContent = dateLabel;
+        grid.appendChild(sep);
+      }
       const card = document.createElement('div');
       card.className = 'clip-card';
       if (this.selectedClips.has(clip.id)) card.classList.add('selected');
@@ -695,10 +1014,10 @@ const App = {
 
       let overlayBtn = '';
       if (this.selectMode) {
-        const checked = this.selectedClips.has(clip.id) ? 'checked' : '';
-        overlayBtn = `<div class="clip-card-select ${checked}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>`;
+        const isChecked = this.selectedClips.has(clip.id);
+        overlayBtn = `<div class="clip-card-select ${isChecked ? 'checked' : ''}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${isChecked ? '#000' : 'rgba(255,255,255,0.5)'}" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>`;
       } else {
-        overlayBtn = `<button class="clip-card-delete" data-clip-id="${clip.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+        overlayBtn = `<button class="clip-card-delete" data-clip-id="${clip.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>`;
       }
 
       card.innerHTML = `
@@ -717,8 +1036,33 @@ const App = {
         if (e.target.closest('.clip-card-fav')) { this.toggleFavoriteById(clip.id); return; }
         if (e.target.closest('.clip-card-delete')) { this.quickDeleteClip(clip.id); return; }
         if (this.selectMode) {
+          // Shift-click: select range between last clicked and this clip
+          if (e.shiftKey && this._lastClickedClipId) {
+            const lastIdx = this.clips.findIndex(c => c.id === this._lastClickedClipId);
+            const curIdx = this.clips.findIndex(c => c.id === clip.id);
+            if (lastIdx >= 0 && curIdx >= 0) {
+              const start = Math.min(lastIdx, curIdx);
+              const end = Math.max(lastIdx, curIdx);
+              for (let i = start; i <= end; i++) {
+                this.selectedClips.add(this.clips[i].id);
+              }
+              this.renderClipGrid();
+              this.updateBulkUI();
+              return;
+            }
+          }
+          this._lastClickedClipId = clip.id;
           if (this.selectedClips.has(clip.id)) { this.selectedClips.delete(clip.id); card.classList.remove('selected'); }
           else { this.selectedClips.add(clip.id); card.classList.add('selected'); }
+          this.updateBulkUI();
+          return;
+        }
+        // Shift-click outside select mode: enter select mode with range
+        if (e.shiftKey) {
+          this.selectMode = true;
+          this.selectedClips.add(clip.id);
+          this._lastClickedClipId = clip.id;
+          this.renderClipGrid();
           this.updateBulkUI();
           return;
         }
@@ -742,6 +1086,7 @@ const App = {
 
       grid.appendChild(card);
     });
+    this._applyLibGridMode();
   },
 
   async quickDeleteClip(clipId) {
@@ -779,6 +1124,9 @@ const App = {
     textView.classList.add('hidden');
     textView.innerHTML = '';
     toolbar.style.display = 'none';
+
+    // Show/hide Extract Text button based on clip type (images only)
+    document.getElementById('edOcrBtn').style.display = (clip.type === 'image') ? '' : 'none';
 
     if (clip.type === 'image' && clip.filePath) {
       canvas.classList.remove('hidden');
@@ -930,20 +1278,65 @@ const App = {
     tabList.innerHTML = '';
     this.openTabs.forEach(clip => {
       const tab = document.createElement('div');
-      tab.className = `tab ${clip.id === this.activeTabId ? 'active' : ''}`;
+      const isActive = clip.id === this.activeTabId;
+      const isSelected = this.selectedTabs.has(clip.id);
+      tab.className = `tab ${isActive ? 'active' : ''} ${isSelected ? 'tab-selected' : ''}`;
 
       let icon = '';
       if (clip.type === 'image' && clip.filePath) {
         icon = `<img class="tab-icon" src="file://${clip.filePath.replace(/\\/g, '/')}" />`;
       } else {
-        const colors = { text: '#5ac8fa', link: '#ff9500', code: '#af52de' };
-        icon = `<span class="tab-icon" style="background:${colors[clip.type] || '#666'}"></span>`;
+        const tabIcons = {
+          text: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+          link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>',
+          code: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#af52de" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+        };
+        icon = `<span class="tab-icon" style="display:flex;align-items:center;justify-content:center">${tabIcons[clip.type] || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'}</span>`;
       }
 
       tab.innerHTML = `${icon}<span class="tab-title">${this.escapeHtml((clip.title || 'Untitled').substring(0, 30))}</span><button class="tab-close">&times;</button>`;
 
+      // Hover preview
+      let hoverTimer = null;
+      tab.addEventListener('mouseenter', (e) => {
+        hoverTimer = setTimeout(() => {
+          this._showTabPreview(clip, tab);
+        }, 400);
+      });
+      tab.addEventListener('mouseleave', () => {
+        clearTimeout(hoverTimer);
+        this._hideTabPreview();
+      });
+
       tab.addEventListener('click', (e) => {
-        if (e.target.closest('.tab-close')) { this.closeTab(clip.id); return; }
+        if (e.target.closest('.tab-close')) {
+          // If this tab is in a multi-select, close all selected
+          if (this.selectedTabs.has(clip.id) && this.selectedTabs.size > 1) {
+            const toClose = [...this.selectedTabs];
+            this.selectedTabs.clear();
+            toClose.forEach(id => this.closeTab(id));
+            return;
+          }
+          this.closeTab(clip.id);
+          return;
+        }
+        if (e.shiftKey && this._lastClickedTabId) {
+          // Shift-click: select range between last clicked and this tab
+          const lastIdx = this.openTabs.findIndex(t => t.id === this._lastClickedTabId);
+          const curIdx = this.openTabs.findIndex(t => t.id === clip.id);
+          if (lastIdx >= 0 && curIdx >= 0) {
+            const start = Math.min(lastIdx, curIdx);
+            const end = Math.max(lastIdx, curIdx);
+            for (let i = start; i <= end; i++) {
+              this.selectedTabs.add(this.openTabs[i].id);
+            }
+          }
+          this.renderTabs();
+          return;
+        }
+        // Normal click: clear selection, activate tab
+        this.selectedTabs.clear();
+        this._lastClickedTabId = clip.id;
         this.activeTabId = clip.id;
         this.activeClip = clip;
         this.renderTabs();
@@ -956,8 +1349,59 @@ const App = {
         this.showTabContextMenu(e, clip);
       });
 
+      // Make tab draggable so it can be dropped into pinned folders
+      tab.draggable = true;
+      tab.addEventListener('dragstart', (e) => {
+        this._internalDrag = true;
+        this._dragClipId = clip.id;
+        e.dataTransfer.setData('text/plain', clip.id);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      tab.addEventListener('dragend', () => {
+        this._internalDrag = false;
+        this._dragClipId = null;
+      });
+
       tabList.appendChild(tab);
     });
+    // Update tab fade indicators
+    this._updateTabFades();
+  },
+
+  _updateTabFades() {
+    const tabList = document.getElementById('tabList');
+    const fl = document.getElementById('tabFadeLeft');
+    const fr = document.getElementById('tabFadeRight');
+    if (!tabList || !fl || !fr) return;
+    const update = () => {
+      fl.classList.toggle('visible', tabList.scrollLeft > 4);
+      fr.classList.toggle('visible', tabList.scrollLeft < tabList.scrollWidth - tabList.clientWidth - 4);
+    };
+    update();
+    tabList.removeEventListener('scroll', update);
+    tabList.addEventListener('scroll', update);
+  },
+
+  _updateLibTabFades() {
+    const tabList = document.getElementById('libraryTabs');
+    const fl = document.getElementById('libFadeLeft');
+    const fr = document.getElementById('libFadeRight');
+    if (!tabList || !fl || !fr) return;
+    const update = () => {
+      fl.classList.toggle('visible', tabList.scrollLeft > 4);
+      const canScrollRight = tabList.scrollLeft < tabList.scrollWidth - tabList.clientWidth - 4;
+      fr.classList.toggle('visible', canScrollRight);
+      // Position right fade at the right edge of tabs container
+      if (canScrollRight) {
+        const header = tabList.parentElement;
+        const tabsRect = tabList.getBoundingClientRect();
+        const headerRect = header.getBoundingClientRect();
+        fr.style.right = (headerRect.right - tabsRect.right) + 'px';
+      }
+    };
+    update();
+    tabList.removeEventListener('scroll', update);
+    tabList.addEventListener('scroll', update);
   },
 
   showTabContextMenu(e, clip) {
@@ -969,14 +1413,24 @@ const App = {
 
     const items = [
       { label: 'Close', action: () => this.closeTab(clip.id) },
-      { label: 'Close All Tabs', action: () => { this.openTabs = []; this.activeTabId = null; this.activeClip = null; this.closeEditor(); this.renderTabs(); }},
+    ];
+    if (this.selectedTabs.size > 1) {
+      items.push({ label: `Close ${this.selectedTabs.size} Selected`, action: () => {
+        const toClose = [...this.selectedTabs];
+        this.selectedTabs.clear();
+        toClose.forEach(id => this.closeTab(id));
+      }});
+    }
+    items.push(
+      { label: 'Close All Tabs', action: () => { this.openTabs = []; this.selectedTabs.clear(); this.activeTabId = null; this.activeClip = null; this.closeEditor(); this.renderTabs(); }},
       { label: 'Close Tabs to the Right', action: () => {
         const idx = this.openTabs.findIndex(t => t.id === clip.id);
         const removed = this.openTabs.splice(idx + 1);
         removed.forEach(t => { if (this.activeTabId === t.id) { this.activeTabId = clip.id; this.activeClip = clip; }});
+        this.selectedTabs.clear();
         this.renderTabs();
       }}
-    ];
+    );
 
     items.forEach(item => {
       const btn = document.createElement('button');
@@ -1046,9 +1500,18 @@ const App = {
     });
   },
 
+  explorerForwardHistory: [],
+
+  refreshExplorer() {
+    if (this.explorerPath) {
+      ucb.listDirectory(this.explorerPath).then(entries => this.renderExplorerFiles(entries));
+    }
+  },
+
   async navigateExplorer(dirPath) {
     if (!dirPath) return;
     this.explorerHistory.push(this.explorerPath);
+    this.explorerForwardHistory = [];
     this.explorerPath = dirPath;
     this.renderExplorerBreadcrumb();
     const entries = await ucb.listDirectory(dirPath);
@@ -1057,56 +1520,232 @@ const App = {
 
   explorerGoBack() {
     if (this.explorerHistory.length === 0) return;
+    this.explorerForwardHistory.push(this.explorerPath);
     const prev = this.explorerHistory.pop();
     this.explorerPath = prev;
     this.renderExplorerBreadcrumb();
     ucb.listDirectory(prev).then(entries => this.renderExplorerFiles(entries));
   },
 
+  explorerGoForward() {
+    if (this.explorerForwardHistory.length === 0) return;
+    this.explorerHistory.push(this.explorerPath);
+    const next = this.explorerForwardHistory.pop();
+    this.explorerPath = next;
+    this.renderExplorerBreadcrumb();
+    ucb.listDirectory(next).then(entries => this.renderExplorerFiles(entries));
+  },
+
   renderExplorerBreadcrumb() {
     const bc = document.getElementById('explorerBreadcrumb');
-    // Show last 2 path segments
+    bc.innerHTML = '';
     const parts = this.explorerPath.replace(/\\/g, '/').split('/').filter(Boolean);
-    const display = parts.slice(-2).join(' / ');
-    bc.textContent = display;
-    bc.title = this.explorerPath;
+
+    const startEdit = () => {
+      bc.style.direction = 'ltr';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = this.explorerPath.replace(/\\/g, '/');
+      input.style.cssText = 'flex:1;width:100%;font-size:10px;background:transparent;border:none;color:var(--text-primary);padding:0;outline:none;min-width:0';
+      bc.innerHTML = '';
+      bc.appendChild(input);
+      input.focus();
+      input.select();
+      const commit = () => {
+        const val = input.value.trim();
+        if (val && val !== this.explorerPath.replace(/\\/g, '/')) {
+          this.navigateExplorer(val);
+        } else {
+          this.renderExplorerBreadcrumb();
+        }
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { e.preventDefault(); this.renderExplorerBreadcrumb(); }
+      });
+    };
+
+    // Wrap all segments in an LTR container (breadcrumb is RTL to show end)
+    const inner = document.createElement('span');
+    inner.style.cssText = 'direction:ltr;display:inline-flex;align-items:center;white-space:nowrap';
+
+    parts.forEach((part, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.textContent = ' › ';
+        sep.style.cssText = 'opacity:0.4;pointer-events:none;margin:0 1px';
+        inner.appendChild(sep);
+      }
+      const seg = document.createElement('span');
+      seg.textContent = part;
+      seg.style.cssText = 'cursor:pointer;border-radius:3px;padding:1px 3px;transition:background 0.15s';
+      seg.addEventListener('mouseenter', () => { seg.style.background = 'var(--bg-hover)'; seg.style.color = 'var(--text-primary)'; });
+      seg.addEventListener('mouseleave', () => { seg.style.background = ''; seg.style.color = ''; });
+      const targetPath = parts.slice(0, i + 1).join('/');
+      const isLast = i === parts.length - 1;
+      seg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isLast) this.navigateExplorer(targetPath);
+      });
+      if (isLast) {
+        seg.addEventListener('dblclick', (e) => { e.stopPropagation(); startEdit(); });
+      }
+      inner.appendChild(seg);
+    });
+    bc.appendChild(inner);
+    bc.title = 'Double-click to edit path';
+    bc.addEventListener('dblclick', startEdit);
+    // Update breadcrumb scroll fades
+    this._updateBcFades();
+  },
+
+  _updateBcFades() {
+    const bc = document.getElementById('explorerBreadcrumb');
+    const fl = document.getElementById('bcFadeLeft');
+    const fr = document.getElementById('bcFadeRight');
+    if (!bc || !fl || !fr) return;
+    const update = () => {
+      // RTL: scrollLeft is negative or 0
+      const maxScroll = bc.scrollWidth - bc.clientWidth;
+      const scrollPos = Math.abs(bc.scrollLeft);
+      fl.classList.toggle('visible', scrollPos < maxScroll - 4);
+      fr.classList.toggle('visible', scrollPos > 4);
+    };
+    update();
+    bc.removeEventListener('scroll', update);
+    bc.addEventListener('scroll', update);
+  },
+
+  _libGridMode: 2,
+
+  _applyLibGridMode() {
+    const grid = document.getElementById('clipGrid');
+    grid.classList.remove('grid-xs', 'grid-sm', 'grid-md', 'grid-lg');
+    const modes = ['grid-xs', 'grid-sm', 'grid-md', 'grid-lg'];
+    grid.classList.add(modes[this._libGridMode] || 'grid-sm');
+  },
+
+  _explorerThumbMode: 0,
+
+  _explorerSortMode: 'name-asc',
+
+  _sortExplorerEntries(entries) {
+    const mode = this._explorerSortMode;
+    // Directories always first
+    const dirs = entries.filter(e => e.isDirectory);
+    const files = entries.filter(e => !e.isDirectory);
+    const sorter = (a, b) => {
+      if (mode === 'name-asc') return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      if (mode === 'name-desc') return b.name.localeCompare(a.name, undefined, { sensitivity: 'base' });
+      if (mode === 'date-desc') return (b.modified || 0) - (a.modified || 0);
+      if (mode === 'date-asc') return (a.modified || 0) - (b.modified || 0);
+      if (mode === 'size-desc') return (b.size || 0) - (a.size || 0);
+      if (mode === 'size-asc') return (a.size || 0) - (b.size || 0);
+      if (mode === 'type') return (a.extension || '').localeCompare(b.extension || '');
+      return 0;
+    };
+    dirs.sort(sorter);
+    files.sort(sorter);
+    return [...dirs, ...files];
   },
 
   renderExplorerFiles(entries) {
+    this._lastExplorerEntries = entries;
+    this._explorerSelectedPaths = new Set();
+    this._explorerLastClickIdx = -1;
+    // Clean up previous rubber-band listeners
+    if (this._explorerRubberCleanup) { this._explorerRubberCleanup(); this._explorerRubberCleanup = null; }
     const container = document.getElementById('explorerFileList');
     container.innerHTML = '';
+    container.style.position = 'relative';
+    container.className = 'explorer-file-list' + (this._explorerThumbMode === 1 ? ' thumb-grid' : this._explorerThumbMode === 2 ? ' thumb-grid-lg' : '');
 
-    if (entries.length === 0) {
+    const sorted = this._sortExplorerEntries(entries);
+    this._explorerSortedEntries = sorted;
+
+    // Update status bar
+    this._updateExplorerStatus(sorted.length);
+
+    if (sorted.length === 0) {
       container.innerHTML = '<div style="padding:12px;font-size:11px;color:var(--text-muted);text-align:center">Empty folder</div>';
       return;
     }
 
-    entries.forEach(entry => {
+    const imgExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
+    const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.html', '.css', '.xml', '.csv', '.log', '.py', '.java', '.c', '.cpp', '.h'];
+    const showThumbs = this._explorerThumbMode > 0;
+
+    sorted.forEach((entry, idx) => {
       const item = document.createElement('div');
       item.className = 'file-item';
+      item.dataset.idx = idx;
+      item.dataset.path = entry.path;
+      const isImage = !entry.isDirectory && imgExts.includes(entry.extension);
+      const isText = !entry.isDirectory && textExts.includes(entry.extension);
 
       let icon = '';
       if (entry.isDirectory) {
         icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
+      } else if (isImage) {
+        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
       } else {
-        const imgExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
-        if (imgExts.includes(entry.extension)) {
-          icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-        } else {
-          icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-        }
+        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
       }
 
       const size = entry.isDirectory ? '' : this.formatSize(entry.size);
 
-      item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+      if (showThumbs && isImage) {
+        item.innerHTML = `<div class="file-item-thumb"><img src="file://${entry.path.replace(/\\/g, '/')}" loading="lazy" /></div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+      } else if (showThumbs) {
+        item.innerHTML = `<div class="file-item-thumb">${icon}</div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+      } else {
+        item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name">${this.escapeHtml(entry.name)}</span><span class="file-item-meta">${size}</span>`;
+      }
 
       // Right-click context menu
       item.addEventListener('contextmenu', (e) => {
         e.preventDefault();
+        if (!this._explorerSelectedPaths.has(entry.path)) {
+          this._explorerSelectSingle(idx);
+        }
         this.showExplorerContextMenu(e, entry.path, entry.name, false, entry.isDirectory);
       });
 
+      // Click = select; double-click = open
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.ctrlKey || e.metaKey) {
+          this._explorerToggleSelect(idx);
+        } else if (e.shiftKey && this._explorerLastClickIdx >= 0) {
+          this._explorerRangeSelect(this._explorerLastClickIdx, idx);
+        } else {
+          this._explorerSelectSingle(idx);
+        }
+      });
+
+      item.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        if (entry.isDirectory) {
+          this.navigateExplorer(entry.path);
+        } else if (isImage || isText) {
+          // Open in editor
+          const fakeClip = { id: '__explorer__', type: isImage ? 'image' : 'text', filePath: entry.path, title: entry.name, content: '' };
+          if (isText) {
+            // Read text content and open
+            ucb.readTextFile(entry.path).then(text => {
+              fakeClip.content = text;
+              this.openEditor(fakeClip);
+            }).catch(() => ucb.openInExplorer(entry.path));
+          } else {
+            this.openEditor(fakeClip);
+          }
+        } else {
+          ucb.openInExplorer(entry.path);
+        }
+      });
+
+      // Drag (directories are drop targets)
       if (entry.isDirectory) {
         item.draggable = true;
         item.addEventListener('dragstart', (e) => {
@@ -1115,8 +1754,6 @@ const App = {
           e.dataTransfer.setData('text/x-folder-path', entry.path);
         });
         item.addEventListener('dragend', () => { this._dragFolderPath = null; this._dragFolderName = null; });
-        item.addEventListener('click', () => this.navigateExplorer(entry.path));
-        // Drop target for clips
         item.addEventListener('dragover', (e) => { e.preventDefault(); item.classList.add('drag-over'); });
         item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
         item.addEventListener('drop', async (e) => {
@@ -1128,12 +1765,121 @@ const App = {
             this.navigateExplorer(this.explorerPath);
           }
         });
-      } else {
-        item.addEventListener('click', () => ucb.openInExplorer(entry.path));
       }
 
       container.appendChild(item);
     });
+
+    // Click empty area to deselect
+    container.addEventListener('click', (e) => {
+      if (e.target === container) {
+        this._explorerClearSelection();
+      }
+    });
+
+    // Rubber-band (drag-to-select) on empty area
+    this._bindExplorerRubberBand(container, sorted);
+  },
+
+  // -- Explorer selection helpers --
+  _explorerSelectSingle(idx) {
+    this._explorerSelectedPaths = new Set();
+    const entry = this._explorerSortedEntries[idx];
+    if (entry) this._explorerSelectedPaths.add(entry.path);
+    this._explorerLastClickIdx = idx;
+    this._explorerUpdateSelectionUI();
+  },
+  _explorerToggleSelect(idx) {
+    const entry = this._explorerSortedEntries[idx];
+    if (!entry) return;
+    if (this._explorerSelectedPaths.has(entry.path)) {
+      this._explorerSelectedPaths.delete(entry.path);
+    } else {
+      this._explorerSelectedPaths.add(entry.path);
+    }
+    this._explorerLastClickIdx = idx;
+    this._explorerUpdateSelectionUI();
+  },
+  _explorerRangeSelect(fromIdx, toIdx) {
+    const lo = Math.min(fromIdx, toIdx);
+    const hi = Math.max(fromIdx, toIdx);
+    this._explorerSelectedPaths = new Set();
+    for (let i = lo; i <= hi; i++) {
+      const entry = this._explorerSortedEntries[i];
+      if (entry) this._explorerSelectedPaths.add(entry.path);
+    }
+    this._explorerUpdateSelectionUI();
+  },
+  _explorerClearSelection() {
+    this._explorerSelectedPaths = new Set();
+    this._explorerLastClickIdx = -1;
+    this._explorerUpdateSelectionUI();
+  },
+  _explorerUpdateSelectionUI() {
+    const container = document.getElementById('explorerFileList');
+    if (!container) return;
+    container.querySelectorAll('.file-item').forEach(el => {
+      el.classList.toggle('selected', this._explorerSelectedPaths.has(el.dataset.path));
+    });
+    const total = (this._explorerSortedEntries || []).length;
+    this._updateExplorerStatus(total);
+  },
+  _updateExplorerStatus(total) {
+    const countEl = document.getElementById('explorerFileCount');
+    const selEl = document.getElementById('explorerSelectionCount');
+    if (countEl) countEl.textContent = `${total} item${total !== 1 ? 's' : ''}`;
+    if (selEl) {
+      const sel = (this._explorerSelectedPaths || new Set()).size;
+      selEl.textContent = sel > 0 ? `${sel} selected` : '';
+    }
+  },
+  _bindExplorerRubberBand(container, sorted) {
+    let rect = null, startX = 0, startY = 0, active = false;
+    const onDown = (e) => {
+      if (e.target !== container && e.target.closest('.file-item')) return;
+      if (e.button !== 0) return;
+      active = true;
+      const cr = container.getBoundingClientRect();
+      startX = e.clientX - cr.left + container.scrollLeft;
+      startY = e.clientY - cr.top + container.scrollTop;
+      rect = document.createElement('div');
+      rect.className = 'explorer-selection-rect';
+      container.appendChild(rect);
+      if (!e.ctrlKey && !e.shiftKey) this._explorerSelectedPaths = new Set();
+    };
+    const onMove = (e) => {
+      if (!active || !rect) return;
+      const cr = container.getBoundingClientRect();
+      const curX = e.clientX - cr.left + container.scrollLeft;
+      const curY = e.clientY - cr.top + container.scrollTop;
+      const x = Math.min(startX, curX), y = Math.min(startY, curY);
+      const w = Math.abs(curX - startX), h = Math.abs(curY - startY);
+      rect.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px;position:absolute;border:1px solid rgba(10,132,255,0.6);background:rgba(10,132,255,0.1);pointer-events:none;z-index:5`;
+      // Hit-test items
+      const rr = { left: x, top: y, right: x + w, bottom: y + h };
+      container.querySelectorAll('.file-item').forEach(el => {
+        const er = { left: el.offsetLeft, top: el.offsetTop, right: el.offsetLeft + el.offsetWidth, bottom: el.offsetTop + el.offsetHeight };
+        const hit = !(er.right < rr.left || er.left > rr.right || er.bottom < rr.top || er.top > rr.bottom);
+        const path = el.dataset.path;
+        if (hit) this._explorerSelectedPaths.add(path);
+        else if (!e.ctrlKey) this._explorerSelectedPaths.delete(path);
+        el.classList.toggle('selected', this._explorerSelectedPaths.has(path));
+      });
+      this._updateExplorerStatus(sorted.length);
+    };
+    const onUp = () => {
+      active = false;
+      if (rect) { rect.remove(); rect = null; }
+    };
+    container.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    // Store cleanup ref
+    this._explorerRubberCleanup = () => {
+      container.removeEventListener('mousedown', onDown);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
   },
 
   // ===== Explorer Context Menu =====
@@ -1149,6 +1895,7 @@ const App = {
       if (!alreadyPinned) {
         items += `<button class="context-menu-item" data-action="add-pin">Add to Pins</button>`;
       }
+      items += `<button class="context-menu-item" data-action="open-in-library">Open in Library</button>`;
     }
     items += `<button class="context-menu-item" data-action="copy-path">Copy Path</button>`;
     menu.innerHTML = items;
@@ -1164,6 +1911,8 @@ const App = {
         this.renderPinnedFolders();
         this.renderQuickAccess();
         this.toast(`Pinned "${folderName}"`, 'success');
+      } else if (action === 'open-in-library') {
+        this.openFolderInLibrary(filePath, name);
       } else if (action === 'copy-path') {
         navigator.clipboard.writeText(filePath);
         this.toast('Path copied', 'success');
@@ -1189,6 +1938,92 @@ const App = {
     if (!this.activeClip) return;
     const result = await ucb.saveClipAs(this.activeClip.id);
     if (result) this.toast('Saved', 'success');
+  },
+
+  async showQrCode() {
+    if (!this.activeClip) return;
+    this.toast('Generating QR code...', 'info');
+    try {
+      const result = await ucb.generateQR(this.activeClip.id);
+      const qrImg = result?.qrDataUrl || result;
+      if (qrImg) {
+        Dialogs.show(`
+          <div class="modal-header"><h2>QR Code</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+          <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">Scan this QR code from another device to access this clip. <strong>Both devices must be on the same Wi-Fi network.</strong></p>
+          <div style="text-align:center;padding:16px"><img src="${qrImg}" style="width:200px;height:200px;image-rendering:pixelated;border-radius:8px" /></div>
+          <div class="btn-row"><button class="btn btn-secondary" onclick="Dialogs.close()">Close</button></div>
+        `);
+      } else {
+        this.toast('Failed to generate QR code', 'error');
+      }
+    } catch (e) { console.error('QR error:', e); this.toast('QR code error', 'error'); }
+  },
+
+  async generateShareLink() {
+    if (!this.activeClip) return;
+    this.toast('Generating link...', 'info');
+    try {
+      const result = await ucb.createShareLink(this.activeClip.id, 60);
+      const url = typeof result === 'string' ? result : (result && result.url);
+      if (url) {
+        Dialogs.show(`
+          <div class="modal-header"><h2>Temporary Link</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+          <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">This link will expire in 1 hour. <strong>The other device must be on the same Wi-Fi network</strong> to access it.</p>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            <input type="text" class="form-input" id="shareLinkInput" value="${url}" readonly style="flex:1;font-size:11px" />
+            <button class="btn btn-primary" id="copyShareLinkBtn">Copy</button>
+          </div>
+          <div class="btn-row"><button class="btn btn-secondary" onclick="Dialogs.close()">Close</button></div>
+        `);
+        document.getElementById('copyShareLinkBtn').addEventListener('click', () => {
+          navigator.clipboard.writeText(url);
+          this.toast('Link copied', 'success');
+        });
+      } else {
+        this.toast('Failed to generate link', 'error');
+      }
+    } catch (e) { console.error('Share link error:', e); this.toast('Link generation error', 'error'); }
+  },
+
+  async showClipHistory() {
+    if (!this.activeClip) return;
+    const history = await ucb.getClipHistory(this.activeClip.id);
+    if (!history || history.length === 0) {
+      this.toast('No edit history for this clip', 'info');
+      return;
+    }
+    const rows = history.map((h, i) => {
+      const date = new Date(h.editedAt).toLocaleString();
+      const preview = h.content ? this.escapeHtml(h.content.substring(0, 80)) : (h.filePath ? `Image: ${h.filePath.split(/[\\/]/).pop()}` : 'Unknown');
+      return `<div class="history-item" data-idx="${i}" style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:var(--radius-sm);cursor:pointer;transition:var(--transition);border:1px solid var(--border);margin-bottom:4px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preview}</div>
+          <div style="font-size:9px;color:var(--text-muted)">${date}</div>
+        </div>
+        <button class="btn btn-secondary history-restore-btn" data-idx="${i}" style="font-size:10px;padding:3px 8px;flex-shrink:0">Restore</button>
+      </div>`;
+    }).join('');
+
+    Dialogs.show(`
+      <div class="modal-header"><h2>Edit History</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+      <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">${history.length} version(s) saved for this clip. Click Restore to revert to a previous version.</p>
+      <div style="max-height:300px;overflow-y:auto">${rows}</div>
+      <div class="btn-row"><button class="btn btn-secondary" onclick="Dialogs.close()">Close</button></div>
+    `);
+
+    document.querySelectorAll('.history-restore-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.idx);
+        const entry = history[idx];
+        if (entry.content) {
+          await ucb.updateClip(this.activeClip.id, { content: entry.content });
+          this.activeClip.content = entry.content;
+        }
+        Dialogs.close();
+        this.openEditor(this.activeClip);
+        this.toast('Version restored', 'success');
+      });
+    });
   },
 
   async deleteActiveClip() {
@@ -1266,9 +2101,22 @@ const App = {
         const ac = this.allClips.find(x => x.id === e.clipId);
         if (ac) ac.favorite = e.oldVal;
       }
+    } else if (action.type === 'move') {
+      await ucb.moveClipToFolder(action.clipId, action.oldFolderId);
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'bulkMove') {
+      for (const e of action.entries) {
+        await ucb.moveClipToFolder(e.clipId, e.oldFolderId);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
     }
     this.renderClipGrid();
     this.renderLeftSidebar();
+    this.renderLibraryTabs();
     this.toast('Undone', 'info');
   },
 
@@ -1290,9 +2138,22 @@ const App = {
         const ac = this.allClips.find(x => x.id === e.clipId);
         if (ac) ac.favorite = action.newVal;
       }
+    } else if (action.type === 'move') {
+      await ucb.moveClipToFolder(action.clipId, action.newFolderId);
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'bulkMove') {
+      for (const e of action.entries) {
+        await ucb.moveClipToFolder(e.clipId, action.newFolderId);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
     }
     this.renderClipGrid();
     this.renderLeftSidebar();
+    this.renderLibraryTabs();
     this.toast('Redone', 'info');
   },
 
@@ -1342,14 +2203,102 @@ const App = {
 
   async takeScreenshot() {
     try {
+      // Hide the app first so it doesn't appear in the screenshot
+      await ucb.minimize();
+      // Small delay to let the window fully hide
+      await new Promise(r => setTimeout(r, 300));
       await ucb.takeScreenshot();
+      // Bring app back into focus after screenshot
+      await new Promise(r => setTimeout(r, 500));
+      ucb.showWindow();
     } catch (e) { console.error('Screenshot error:', e); }
+  },
+
+  _toggleSearchFilterDropdown(btnId, inputId, mode) {
+    const btn = document.getElementById(btnId);
+    const existing = btn.parentElement.querySelector('.search-filter-dropdown');
+    if (existing) { existing.remove(); btn.classList.remove('active'); return; }
+    btn.classList.add('active');
+    const parent = btn.parentElement;
+    parent.style.position = 'relative';
+    const dd = document.createElement('div');
+    dd.className = 'search-filter-dropdown';
+    dd.innerHTML = `
+      <div class="filter-row"><label>Type</label><select id="_filterType"><option value="">All</option><option value="image">Images</option><option value="text">Text</option><option value="link">Links</option><option value="code">Code</option></select></div>
+      <div class="filter-row"><label>Date</label><select id="_filterDate"><option value="">Any time</option><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option></select></div>
+      <div class="filter-row"><label>Favorite</label><select id="_filterFav"><option value="">Any</option><option value="yes">Favorites only</option></select></div>
+      <div class="filter-actions"><button class="btn btn-primary" id="_filterApply" style="font-size:10px;padding:4px 12px;flex:1">Apply</button><button class="btn btn-secondary" id="_filterClear" style="font-size:10px;padding:4px 12px">Clear</button></div>
+    `;
+    parent.appendChild(dd);
+    dd.querySelector('#_filterApply').addEventListener('click', () => {
+      const type = dd.querySelector('#_filterType').value;
+      const date = dd.querySelector('#_filterDate').value;
+      const fav = dd.querySelector('#_filterFav').value;
+      let parts = [];
+      if (type) parts.push(`type:${type}`);
+      if (date) parts.push(`date:${date}`);
+      if (fav) parts.push('is:fav');
+      const input = document.getElementById(inputId);
+      const existingText = input.value.replace(/\b(type|date|is):\S+/g, '').trim();
+      input.value = (parts.join(' ') + (existingText ? ' ' + existingText : '')).trim();
+      input.dispatchEvent(new Event('input'));
+      dd.remove(); btn.classList.remove('active');
+    });
+    dd.querySelector('#_filterClear').addEventListener('click', () => {
+      const input = document.getElementById(inputId);
+      input.value = '';
+      input.dispatchEvent(new Event('input'));
+      dd.remove(); btn.classList.remove('active');
+    });
+    // Close on outside click
+    const closeHandler = (e) => {
+      if (!dd.contains(e.target) && e.target !== btn) {
+        dd.remove(); btn.classList.remove('active');
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
+  },
+
+  handleRecentSearch(query) {
+    // Filter both recent clips lists in the left sidebar
+    const q = query.toLowerCase().trim();
+    ['#recentImagesList', '#recentTextsList'].forEach(sel => {
+      document.querySelectorAll(`${sel} .recent-clip-item`).forEach(item => {
+        const title = (item.querySelector('.rc-title')?.textContent || '').toLowerCase();
+        const meta = (item.querySelector('.rc-meta')?.textContent || '').toLowerCase();
+        item.style.display = (!q || title.includes(q) || meta.includes(q)) ? '' : 'none';
+      });
+    });
+  },
+
+  handleLibrarySearch(query) {
+    if (!query.trim()) {
+      this.clips = [...this.allClips];
+    } else {
+      const q = query.toLowerCase();
+      this.clips = this.allClips.filter(c =>
+        (c.title || '').toLowerCase().includes(q) ||
+        (c.content || '').toLowerCase().includes(q) ||
+        (c.extractedText || '').toLowerCase().includes(q)
+      );
+    }
+    this.renderClipGrid();
+  },
+
+  handleExplorerSearch(query) {
+    const items = document.querySelectorAll('#explorerFileList .file-item');
+    const q = query.toLowerCase();
+    items.forEach(item => {
+      const name = (item.querySelector('.file-item-name')?.textContent || '').toLowerCase();
+      item.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
   },
 
   async handleSearch(query) {
     if (!query.trim()) {
       this.clips = [...this.allClips];
-      document.getElementById('sortBar').style.display = 'none';
+      this.hideSortBarNav();
     } else {
       // Check for filter commands like "type:image" or "date:today"
       const filters = this._parseSearchFilters(query);
@@ -1425,35 +2374,68 @@ const App = {
   },
 
   // ===== Settings =====
+  toggleSettings() {
+    const overlay = document.getElementById('settingsOverlay');
+    if (!overlay.classList.contains('hidden')) {
+      this.closeSettings();
+      return;
+    }
+    this.showSettings();
+  },
+
   showSettings() {
-    document.getElementById('clipGrid').classList.add('hidden');
-    document.getElementById('emptyState').classList.add('hidden');
-    this.closeEditor();
-    const settings = document.getElementById('settingsView');
-    settings.classList.remove('hidden');
+    document.getElementById('settingsOverlay').classList.remove('hidden');
     this.renderSettings();
   },
 
+  closeSettings() {
+    document.getElementById('settingsOverlay').classList.add('hidden');
+  },
+
   async renderSettings() {
-    const view = document.getElementById('settingsView');
+    const view = document.getElementById('settingsContent');
     const settings = await ucb.getSettings() || {};
     const aiSettings = await ucb.getAISettings() || {};
+    const hotkeys = await ucb.getHotkeys() || {};
+    const defaultHotkeys = await ucb.getDefaultHotkeys() || {};
+    const defaultDataDir = await ucb.getAppFolder().catch(() => '') || '';
 
     view.innerHTML = `
-      <h2 style="margin-bottom:24px">Settings</h2>
+      <div class="settings-section">
+        <h3>Display</h3>
+        <div class="setting-row"><label>UI Scale</label><div style="display:flex;gap:8px;align-items:center"><input type="range" id="settUiScale" min="60" max="150" step="5" value="${Math.round((parseInt(settings.uiScale)||100)/5)*5}" class="modern-slider" style="width:120px" /><span id="settUiScaleLabel" style="font-size:11px;color:var(--text-secondary);min-width:36px">${Math.round((parseInt(settings.uiScale)||100)/5)*5}%</span></div></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Ctrl+= to zoom in, Ctrl+- to zoom out, Ctrl+0 to reset.</p>
+      </div>
       <div class="settings-section">
         <h3>General</h3>
         <div class="setting-row"><label>Clipboard Monitoring</label><label class="toggle"><input type="checkbox" id="settClipMonitor" ${settings.clipboardMonitoring === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row"><label>Open on startup</label><label class="toggle"><input type="checkbox" id="settOpenOnStartup" ${settings.openOnStartup !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row"><label>Minimize to tray</label><label class="toggle"><input type="checkbox" id="settMinToTray" ${settings.minimizeToTray !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
-        <div class="setting-row"><label>Clipboard capture notification</label><label class="toggle"><input type="checkbox" id="settClipNotification" ${settings.clipboardNotification !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row"><label>Auto-OCR screenshots</label><label class="toggle"><input type="checkbox" id="settAutoOcr" ${settings.autoOcr === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Automatically extract text from screenshots so you can search text inside images.</p>
       </div>
       <div class="settings-section">
+        <h3>Clipboard Capture</h3>
+        <div class="setting-row"><label>Save text clips</label><label class="toggle"><input type="checkbox" id="settSaveText" ${settings.saveTextClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <div class="setting-row" id="rowNotifyText" style="padding-left:16px"><label>Notify on text clip</label><label class="toggle"><input type="checkbox" id="settNotifyText" ${settings.notifyTextClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <div class="setting-row"><label>Save image clips</label><label class="toggle"><input type="checkbox" id="settSaveImage" ${settings.saveImageClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <div class="setting-row" id="rowNotifyImage" style="padding-left:16px"><label>Notify on image clip</label><label class="toggle"><input type="checkbox" id="settNotifyImage" ${settings.notifyImageClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Notification options are only available when the parent save option is enabled.</p>
+      </div>
+      <div class="settings-section">
+        <h3>Keyboard Shortcuts</h3>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Click a field, then press the key combination you want. Use Ctrl, Shift, Alt as modifiers. Leave empty to disable.</p>
+        <div class="setting-row"><label>Toggle app</label><div style="display:flex;gap:4px;align-items:center"><input type="text" class="form-input hotkey-input" id="settHotkeyToggleApp" value="${this._hotkeyDisplay(hotkeys.toggleApp)}" data-accelerator="${hotkeys.toggleApp || ''}" readonly style="width:160px;font-size:11px;cursor:pointer" placeholder="Click to set..." /><button class="btn btn-secondary hotkey-clear-btn" data-target="settHotkeyToggleApp" style="font-size:10px;padding:4px 6px" title="Clear">&times;</button></div></div>
+        <div class="setting-row"><label>Screenshot</label><div style="display:flex;gap:4px;align-items:center"><input type="text" class="form-input hotkey-input" id="settHotkeyScreenshot" value="${this._hotkeyDisplay(hotkeys.screenshot)}" data-accelerator="${hotkeys.screenshot || ''}" readonly style="width:160px;font-size:11px;cursor:pointer" placeholder="Click to set..." /><button class="btn btn-secondary hotkey-clear-btn" data-target="settHotkeyScreenshot" style="font-size:10px;padding:4px 6px" title="Clear">&times;</button></div></div>
+        <div class="setting-row"><label>Screenshot selection</label><div style="display:flex;gap:4px;align-items:center"><input type="text" class="form-input hotkey-input" id="settHotkeyScreenshotSelection" value="${this._hotkeyDisplay(hotkeys.screenshotSelection)}" data-accelerator="${hotkeys.screenshotSelection || ''}" readonly style="width:160px;font-size:11px;cursor:pointer" placeholder="Click to set..." /><button class="btn btn-secondary hotkey-clear-btn" data-target="settHotkeyScreenshotSelection" style="font-size:10px;padding:4px 6px" title="Clear">&times;</button></div></div>
+        <button class="btn btn-secondary" id="resetHotkeysBtn" style="font-size:10px;margin-top:4px">Reset to Defaults</button>
+      </div>
+      <div class="settings-section">
         <h3>Storage</h3>
-        <div class="setting-row"><label>Data location</label><div style="display:flex;gap:8px;align-items:center"><input type="text" class="form-input" id="settDataDir" value="${settings.dataDirectory || ''}" placeholder="Default" style="width:200px;font-size:11px" readonly /><button class="btn btn-secondary" id="changeDataDirBtn" style="font-size:10px;padding:5px 8px">Change</button></div></div>
-        <div class="setting-row"><label>Clear all data</label><button class="btn btn-danger" id="clearAllDataBtn" style="font-size:11px">Delete All Clips</button></div>
+        <div class="setting-row"><label>Data location</label><div style="display:flex;gap:8px;align-items:center"><input type="text" class="form-input" id="settDataDir" value="${settings.dataDirectory || defaultDataDir}" placeholder="${defaultDataDir}" style="width:200px;font-size:11px" readonly /><button class="btn btn-secondary" id="changeDataDirBtn" style="font-size:10px;padding:5px 8px">Change</button></div></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Changing the directory starts fresh in the new location. Use "Move" to migrate all existing clips.</p>
+        <div class="setting-row"><label>Move all clips to new folder</label><button class="btn btn-secondary" id="moveDataDirBtn" style="font-size:11px">Move Clips Folder</button></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Copies all your clips and data to a new location, then switches to it.</p>
       </div>
       <div class="settings-section">
         <h3>Edit History</h3>
@@ -1463,7 +2445,8 @@ const App = {
       </div>
       <div class="settings-section">
         <h3>Hidden Folder</h3>
-        <div class="setting-row"><label>Passcode</label><button class="btn btn-secondary" onclick="Dialogs.showSetPasscodeDialog()">Set / Change</button></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Hidden folder is protected by Windows Hello (fingerprint, face, or PIN). Falls back to a custom passcode if Windows Hello is unavailable.</p>
+        <div class="setting-row"><label>Fallback passcode</label><button class="btn btn-secondary" onclick="Dialogs.showSetPasscodeDialog()">Set / Change</button></div>
       </div>
       <div class="settings-section">
         <h3>AI Provider</h3>
@@ -1474,6 +2457,55 @@ const App = {
       </div>
       <div class="btn-row"><button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button></div>
     `;
+
+    // UI Scale slider — preview label on input, apply only on mouseup
+    const scaleSlider = document.getElementById('settUiScale');
+    scaleSlider.addEventListener('input', () => {
+      document.getElementById('settUiScaleLabel').textContent = scaleSlider.value + '%';
+    });
+    scaleSlider.addEventListener('change', () => {
+      this._setZoom(parseInt(scaleSlider.value), true);
+    });
+
+    // Dependent save/notify toggles for clipboard capture
+    const saveTextCb = document.getElementById('settSaveText');
+    const notifyTextCb = document.getElementById('settNotifyText');
+    const saveImageCb = document.getElementById('settSaveImage');
+    const notifyImageCb = document.getElementById('settNotifyImage');
+    const updateNotifyDeps = () => {
+      notifyTextCb.disabled = !saveTextCb.checked;
+      if (!saveTextCb.checked) notifyTextCb.checked = false;
+      document.getElementById('rowNotifyText').style.opacity = saveTextCb.checked ? '1' : '0.4';
+      notifyImageCb.disabled = !saveImageCb.checked;
+      if (!saveImageCb.checked) notifyImageCb.checked = false;
+      document.getElementById('rowNotifyImage').style.opacity = saveImageCb.checked ? '1' : '0.4';
+    };
+    saveTextCb.addEventListener('change', updateNotifyDeps);
+    saveImageCb.addEventListener('change', updateNotifyDeps);
+    updateNotifyDeps();
+
+    // Hotkey input bindings
+    this._bindHotkeyInput('settHotkeyToggleApp');
+    this._bindHotkeyInput('settHotkeyScreenshot');
+    this._bindHotkeyInput('settHotkeyScreenshotSelection');
+    // Hotkey clear (×) buttons
+    document.querySelectorAll('.hotkey-clear-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.dataset.target;
+        const el = document.getElementById(targetId);
+        if (el) { el.value = ''; el.dataset.accelerator = ''; }
+      });
+    });
+    document.getElementById('resetHotkeysBtn').addEventListener('click', async () => {
+      const defs = await ucb.getDefaultHotkeys();
+      ['settHotkeyToggleApp','settHotkeyScreenshot','settHotkeyScreenshotSelection'].forEach((id, i) => {
+        const key = ['toggleApp','screenshot','screenshotSelection'][i];
+        const el = document.getElementById(id);
+        el.value = this._hotkeyDisplay(defs[key]);
+        el.dataset.accelerator = defs[key] || '';
+      });
+      this.toast('Hotkeys reset to defaults', 'info');
+    });
 
     document.getElementById('settAIProvider').addEventListener('change', (e) => {
       const v = e.target.value;
@@ -1489,23 +2521,41 @@ const App = {
       await ucb.cleanupOldHistory(days);
       this.toast(`Edit history older than ${days} days cleaned up`, 'success');
     });
-    document.getElementById('clearAllDataBtn').addEventListener('click', async () => {
-      const ok = await Dialogs.confirm('Delete ALL clips?', 'Files will be moved to the Recycle Bin.');
+    document.getElementById('moveDataDirBtn').addEventListener('click', async () => {
+      const newDir = await ucb.chooseDirectory();
+      if (!newDir) return;
+      const ok = await Dialogs.confirm('Move clips folder?', `All clips and data will be copied to:\n${newDir}\n\nThis may take a moment.`);
       if (!ok) return;
-      await ucb.clearAllClips();
-      this.clips = []; this.openTabs = []; this.activeClip = null; this.closeEditor();
-      this.renderClipGrid(); this.renderLeftSidebar(); this.renderTabs();
-      this.toast('All clips deleted', 'info');
+      this.toast('Moving clips folder...', 'info');
+      try {
+        const result = await ucb.moveDataDirectory(newDir);
+        if (result && result.success) {
+          document.getElementById('settDataDir').value = newDir;
+          this.toast('Clips folder moved successfully', 'success');
+        } else {
+          this.toast(result?.error || 'Failed to move clips folder', 'error');
+        }
+      } catch (e) {
+        console.error('Move data dir error:', e);
+        this.toast('Error moving clips folder', 'error');
+      }
     });
     document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
       await ucb.saveSettings({
         clipboardMonitoring: document.getElementById('settClipMonitor').checked?'true':'false',
         openOnStartup: document.getElementById('settOpenOnStartup').checked?'true':'false',
         minimizeToTray: document.getElementById('settMinToTray').checked?'true':'false',
-        clipboardNotification: document.getElementById('settClipNotification').checked?'true':'false',
         autoOcr: document.getElementById('settAutoOcr').checked?'true':'false',
+        saveTextClips: document.getElementById('settSaveText').checked?'true':'false',
+        notifyTextClips: document.getElementById('settNotifyText').checked?'true':'false',
+        saveImageClips: document.getElementById('settSaveImage').checked?'true':'false',
+        notifyImageClips: document.getElementById('settNotifyImage').checked?'true':'false',
         dataDirectory: document.getElementById('settDataDir').value,
-        historyCleanupDays: document.getElementById('settHistoryDays').value
+        historyCleanupDays: document.getElementById('settHistoryDays').value,
+        uiScale: document.getElementById('settUiScale').value,
+        hotkeyToggleApp: document.getElementById('settHotkeyToggleApp').dataset.accelerator || '',
+        hotkeyScreenshot: document.getElementById('settHotkeyScreenshot').dataset.accelerator || '',
+        hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || ''
       });
       // Auto-cleanup history based on setting
       const cleanupDays = parseInt(document.getElementById('settHistoryDays').value);
@@ -1517,6 +2567,58 @@ const App = {
         endpoint: document.getElementById('settAIEndpoint').value
       });
       this.toast('Settings saved', 'success');
+    });
+  },
+
+  // ===== Hotkey Helpers =====
+  _hotkeyDisplay(accelerator) {
+    if (!accelerator) return '';
+    return accelerator
+      .replace(/CommandOrControl/g, 'Ctrl')
+      .replace(/\+/g, ' + ');
+  },
+
+  _bindHotkeyInput(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // Mark as actively setting a keybind so handleKeyboard ignores keys
+    el.addEventListener('focus', () => { el.style.outline = '2px solid var(--accent-green)'; this._settingKeybind = true; });
+    el.addEventListener('blur', () => { el.style.outline = ''; this._settingKeybind = false; });
+    el.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      // Escape clears the binding
+      if (e.key === 'Escape') {
+        el.value = '';
+        el.dataset.accelerator = '';
+        el.blur();
+        return;
+      }
+      // Backspace clears the keybind
+      if (e.key === 'Backspace') {
+        el.value = '';
+        el.dataset.accelerator = '';
+        el.blur();
+        return;
+      }
+      // Ignore lone modifier keys
+      if (['Control','Shift','Alt','Meta'].includes(e.key)) return;
+      const parts = [];
+      if (e.ctrlKey) parts.push('CommandOrControl');
+      if (e.altKey) parts.push('Alt');
+      if (e.shiftKey) parts.push('Shift');
+      // Map special keys
+      let key = e.key;
+      if (key === ' ') key = 'Space';
+      else if (key.length === 1) key = key.toUpperCase();
+      else if (key === 'PrintScreen') key = 'PrintScreen';
+      else if (key.startsWith('Arrow')) key = key;
+      parts.push(key);
+      const accelerator = parts.join('+');
+      el.dataset.accelerator = accelerator;
+      el.value = this._hotkeyDisplay(accelerator);
+      el.blur();
     });
   },
 
@@ -1536,11 +2638,12 @@ const App = {
       'separator',
       { label: 'Move to Folder', action: () => Dialogs.showMoveFolderDialog(clip, this.folders) },
       { label: 'Move to Hidden', action: () => Dialogs.showMoveToHiddenDialog(clip) },
-      { label: 'Share', action: () => Dialogs.showShareDialog(clip) },
+      { label: 'QR Code', action: () => { this.activeClip = clip; this.showQrCode(); } },
+      { label: 'Generate Link', action: () => { this.activeClip = clip; this.generateShareLink(); } },
       'separator',
       { label: 'Delete', danger: true, action: async () => {
-        await ucb.deleteClip(clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
-        this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.toast('Deleted', 'info');
+        await ucb.deleteClip(clip.id); this.allClips = this.allClips.filter(c => c.id !== clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
+        this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer(); this.toast('Deleted', 'info');
       }}
     ];
 
@@ -1593,6 +2696,7 @@ const App = {
       }},
       { label: 'Open in File Explorer', action: () => { ucb.openInExplorer(folder.path || this.explorerHomePath); }},
       { label: 'Browse in Sidebar', action: () => { if (folder.path) this.navigateExplorer(folder.path); }},
+      { label: 'Browse in Library', action: () => { if (folder.path) this.openFolderInLibrary(folder.path, folder.name); }},
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(folder.path || ''); this.toast('Path copied', 'success'); }},
       { label: 'Delete Folder', danger: true, action: async () => { await ucb.deleteFolder(folder.id); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.toast('Folder deleted', 'info'); }}
     ];
@@ -1614,6 +2718,25 @@ const App = {
 
   // ===== Keyboard =====
   handleKeyboard(e) {
+    // Don't handle keys while setting keybinds
+    if (this._settingKeybind) return;
+    // Zoom: Ctrl+= / Ctrl+- / Ctrl+0
+    if (e.ctrlKey && (e.key === '=' || e.key === '+')) {
+      e.preventDefault();
+      this._adjustZoom(10);
+      return;
+    }
+    if (e.ctrlKey && e.key === '-') {
+      e.preventDefault();
+      this._adjustZoom(-10);
+      return;
+    }
+    if (e.ctrlKey && e.key === '0') {
+      e.preventDefault();
+      this._setZoom(100);
+      return;
+    }
+
     if (e.ctrlKey && e.key === 'z') {
       if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
       else { e.preventDefault(); this.performUndo(); }
@@ -1637,10 +2760,57 @@ const App = {
       this.renderClipGrid(); this.updateBulkUI();
     }
     if (e.key === 'Escape') {
+      const settingsOverlay = document.getElementById('settingsOverlay');
+      if (!settingsOverlay.classList.contains('hidden')) { this.closeSettings(); return; }
       if (this.editorOpen) this.closeEditor();
       else if (this.selectMode) this.toggleSelectMode();
       this.dismissContextMenu();
     }
+  },
+
+  _showTabPreview(clip, tabEl) {
+    this._hideTabPreview();
+    const preview = document.createElement('div');
+    preview.className = 'tab-preview';
+    preview.id = 'tabPreview';
+
+    let content = '';
+    if (clip.type === 'image' && clip.filePath) {
+      content = `<img src="file://${clip.filePath.replace(/\\/g, '/')}" />`;
+    } else {
+      const text = (clip.content || clip.title || 'Empty').substring(0, 200);
+      content = `<div class="tab-preview-text">${this.escapeHtml(text)}</div>`;
+    }
+    preview.innerHTML = `${content}<div class="tab-preview-title">${this.escapeHtml(clip.title || 'Untitled')}</div>`;
+
+    document.body.appendChild(preview);
+    const rect = tabEl.getBoundingClientRect();
+    const previewH = preview.offsetHeight;
+    preview.style.left = rect.left + 'px';
+    preview.style.top = Math.max(0, rect.top - previewH - 6) + 'px';
+  },
+
+  _hideTabPreview() {
+    const existing = document.getElementById('tabPreview');
+    if (existing) existing.remove();
+  },
+
+  _adjustZoom(delta) {
+    const current = this._currentZoom || 100;
+    this._setZoom(Math.max(60, Math.min(150, current + delta)));
+  },
+
+  _setZoom(percent, skipSave) {
+    this._currentZoom = percent;
+    ucb.setZoomFactor(percent / 100);
+    // Sync the settings slider if open
+    const slider = document.getElementById('settUiScale');
+    if (slider) {
+      slider.value = percent;
+      const label = document.getElementById('settUiScaleLabel');
+      if (label) label.textContent = percent + '%';
+    }
+    if (!skipSave) ucb.saveSettings({ uiScale: String(percent) }).catch(() => {});
   },
 
   // ===== Helpers =====
@@ -1651,6 +2821,20 @@ const App = {
     toast.textContent = message;
     container.appendChild(toast);
     setTimeout(() => { toast.style.animation = 'toastOut 0.3s ease forwards'; setTimeout(() => toast.remove(), 300); }, 3000);
+  },
+
+  toastWithUndo(message) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast success';
+    toast.style.cssText = 'display:flex;align-items:center;gap:8px';
+    toast.innerHTML = `<span style="flex:1">${this.escapeHtml(message)}</span><button style="background:rgba(255,255,255,0.2);border:none;color:inherit;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">Undo</button>`;
+    toast.querySelector('button').addEventListener('click', () => {
+      this.performUndo();
+      toast.remove();
+    });
+    container.appendChild(toast);
+    setTimeout(() => { toast.style.animation = 'toastOut 0.3s ease forwards'; setTimeout(() => toast.remove(), 300); }, 5000);
   },
 
   escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; },
@@ -1669,6 +2853,25 @@ const App = {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
+  },
+
+  _getDateLabel(timestamp) {
+    if (!timestamp) return 'Unknown';
+    const now = new Date();
+    const date = new Date(timestamp);
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / 86400000);
+    const isSameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+    if (isSameDay(date, now)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+    if (diffDays < 7) return 'This Week';
+    if (diffDays < 14) return 'Last Week';
+    if (diffDays < 30) return 'This Month';
+    if (diffDays < 60) return 'Last Month';
+    if (diffDays < 180) return '2–6 Months Ago';
+    if (diffDays < 365) return '6–12 Months Ago';
+    return 'Over a Year Ago';
   }
 };
 
