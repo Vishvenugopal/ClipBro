@@ -21,6 +21,7 @@ const Editor = {
   cropRect: null,
   textOverlay: null,
   _historyImageCache: null,
+  savedHistoryIndex: 0,
 
   isPanning: false,
   panStartX: 0,
@@ -147,7 +148,7 @@ const Editor = {
 
     // Set cursor
     const cursors = {
-      crop: 'crosshair',
+      crop: 'default',
       pen: 'crosshair',
       highlighter: 'crosshair',
       arrow: 'crosshair',
@@ -170,7 +171,11 @@ const Editor = {
     this.offsetX = 0;
     this.offsetY = 0;
     this.cropMode = false;
+    this.cropDragging = false;
     this.canvas.style.transform = '';
+    // Remove any lingering crop action buttons
+    const existingCropBar = document.querySelector('.crop-actions-bar');
+    if (existingCropBar) existingCropBar.remove();
 
     const img = new Image();
     img.onload = () => {
@@ -190,6 +195,8 @@ const Editor = {
 
       this.ctx.drawImage(img, 0, 0);
       this.saveToHistory();
+      this.savedHistoryIndex = this.historyIndex;
+      this._updateUnsavedIndicator();
       this.setTool('hand');
     };
     img.onerror = () => {
@@ -203,8 +210,8 @@ const Editor = {
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
+      x: Math.max(0, Math.min(this.canvas.width, (e.clientX - rect.left) * scaleX)),
+      y: Math.max(0, Math.min(this.canvas.height, (e.clientY - rect.top) * scaleY))
     };
   },
 
@@ -244,12 +251,25 @@ const Editor = {
       this._applyViewTransform();
       return;
     }
-    if (!this.isDrawing) return;
-
     if (this.cropMode && this.tool === 'crop') {
-      this.cropDragMove(e);
+      if (this.cropDragging) {
+        this.cropDragMove(e);
+        return;
+      }
+      // Update cursor based on handle under mouse
+      const pos = this.getCanvasCoords(e);
+      const handle = this._getCropHandle(pos);
+      const cursorMap = {
+        tl: 'nwse-resize', br: 'nwse-resize',
+        tr: 'nesw-resize', bl: 'nesw-resize',
+        top: 'ns-resize', bottom: 'ns-resize',
+        left: 'ew-resize', right: 'ew-resize',
+        move: 'move'
+      };
+      this.canvas.style.cursor = cursorMap[handle] || 'default';
       return;
     }
+    if (!this.isDrawing) return;
 
     const pos = this.getCanvasCoords(e);
 
@@ -292,13 +312,12 @@ const Editor = {
       if (this.tool === 'hand') this.canvas.style.cursor = 'grab';
       return;
     }
-    if (!this.isDrawing) return;
-    this.isDrawing = false;
-
-    if (this.cropMode && this.tool === 'crop') {
+    if (this.cropMode && this.tool === 'crop' && this.cropDragging) {
       this.cropDragEnd(e);
       return;
     }
+    if (!this.isDrawing) return;
+    this.isDrawing = false;
 
     const pos = this.getCanvasCoords(e);
 
@@ -443,10 +462,10 @@ const Editor = {
   startCropMode() {
     this.cropMode = true;
     this.cropRect = {
-      x: this.canvas.width * 0.1,
-      y: this.canvas.height * 0.1,
-      w: this.canvas.width * 0.8,
-      h: this.canvas.height * 0.8
+      x: 0,
+      y: 0,
+      w: this.canvas.width,
+      h: this.canvas.height
     };
     this.drawCropOverlay();
     this.showCropActions();
@@ -525,7 +544,7 @@ const Editor = {
 
     const bar = document.createElement('div');
     bar.className = 'crop-actions-bar';
-    bar.style.cssText = 'position:absolute;bottom:70px;left:50%;transform:translateX(-50%);z-index:20;display:flex;gap:8px;';
+    bar.style.cssText = 'position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:30;display:flex;gap:8px;background:var(--bg-secondary);padding:8px 12px;border-radius:var(--radius-md);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,0.4);';
 
     const applyBtn = document.createElement('button');
     applyBtn.className = 'btn btn-primary';
@@ -675,6 +694,7 @@ const Editor = {
     }
     // Cache image for sync restore
     this._updateHistoryCache();
+    this._updateUnsavedIndicator();
   },
 
   _updateHistoryCache() {
@@ -706,8 +726,19 @@ const Editor = {
     this.historyIndex--;
     const img = new Image();
     img.onload = () => {
+      this.canvas.width = img.naturalWidth;
+      this.canvas.height = img.naturalHeight;
+      const wrapper = this.canvas.parentElement;
+      const maxW = wrapper.clientWidth - 40;
+      const maxH = wrapper.clientHeight - 40;
+      const ratio = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+      this.displayScale = ratio;
+      this.canvas.style.width = Math.floor(img.naturalWidth * ratio) + 'px';
+      this.canvas.style.height = Math.floor(img.naturalHeight * ratio) + 'px';
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(img, 0, 0);
+      this._historyImageCache = img;
+      this._updateUnsavedIndicator();
     };
     img.src = this.drawHistory[this.historyIndex];
   },
@@ -717,10 +748,27 @@ const Editor = {
     this.historyIndex++;
     const img = new Image();
     img.onload = () => {
+      this.canvas.width = img.naturalWidth;
+      this.canvas.height = img.naturalHeight;
+      const wrapper = this.canvas.parentElement;
+      const maxW = wrapper.clientWidth - 40;
+      const maxH = wrapper.clientHeight - 40;
+      const ratio = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+      this.displayScale = ratio;
+      this.canvas.style.width = Math.floor(img.naturalWidth * ratio) + 'px';
+      this.canvas.style.height = Math.floor(img.naturalHeight * ratio) + 'px';
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(img, 0, 0);
+      this._historyImageCache = img;
+      this._updateUnsavedIndicator();
     };
     img.src = this.drawHistory[this.historyIndex];
+  },
+
+  _updateUnsavedIndicator() {
+    const el = document.getElementById('unsavedIndicator');
+    if (!el) return;
+    el.style.display = (this.historyIndex !== this.savedHistoryIndex) ? '' : 'none';
   },
 
   redraw() {
@@ -758,6 +806,8 @@ const Editor = {
       App.renderLeftSidebar();
       App.renderPinnedFolders();
     }
+    this.savedHistoryIndex = this.historyIndex;
+    this._updateUnsavedIndicator();
     App.toast('Edits saved', 'success');
   }
 };

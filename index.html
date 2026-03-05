@@ -44,6 +44,15 @@
       <aside id="leftSidebar" class="left-sidebar">
         <div class="sidebar-resize-handle" id="leftResizeHandle"></div>
 
+        <!-- Search bar (top of sidebar) -->
+        <div class="sidebar-search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" id="searchInput" placeholder="Search recent clips..." />
+          <button class="search-filter-btn" id="recentFilterBtn" title="Filters">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          </button>
+        </div>
+
         <!-- Recent image clips -->
         <div class="left-section left-section-recent">
           <div class="left-section-header">
@@ -60,15 +69,6 @@
             <span class="left-section-count" id="recentTextCount">0</span>
           </div>
           <div id="recentTextsList" class="recent-clips-list"></div>
-        </div>
-
-        <!-- Search bar (below recent clips) -->
-        <div class="sidebar-search">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-          <input type="text" id="searchInput" placeholder="Search recent clips..." />
-          <button class="search-filter-btn" id="recentFilterBtn" title="Filters">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-          </button>
         </div>
 
         <!-- Groups (always visible, not scrollable) -->
@@ -92,6 +92,10 @@
           <button class="sidebar-bottom-btn hidden" id="hiddenFolderBtn" title="Hidden folder">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             <span>Hidden</span>
+          </button>
+          <button class="sidebar-bottom-btn" id="helpBtn" title="Help &amp; Tutorial">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>Help</span>
           </button>
           <button class="sidebar-bottom-btn" id="actionHistoryBtn" title="Action History">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -145,6 +149,7 @@
           </div>
           <div class="editor-overlay-header">
             <span id="editorClipTitle" class="editor-clip-title">Editing</span>
+            <span id="unsavedIndicator" class="unsaved-indicator" style="display:none">Unsaved changes</span>
             <button class="editor-close-btn" id="closeEditorBtn" title="Close editor">&times;</button>
           </div>
           <div id="editorToolbar" class="editor-toolbar">
@@ -252,7 +257,8 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
               All Clips
             </button>
-            <span id="sortTitle" style="flex:1;font-size:12px;font-weight:600;color:var(--text-primary)"></span>
+            <span id="sortTitle" style="font-size:12px;font-weight:600;color:var(--text-primary)"></span>
+            <div class="sort-bar-spacer"></div>
             <button class="sort-bar-btn" id="selectModeBtnSort" title="Select multiple">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
             </button>
@@ -273,6 +279,8 @@
 
           <!-- Clip grid area -->
           <div id="clipArea" class="clip-area">
+            <div id="clipFadeTop" class="clip-fade-top"></div>
+            <div id="clipFadeBottom" class="clip-fade-bottom"></div>
             <div id="emptyState" class="empty-state">
               <div class="empty-icon">
                 <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12h8M12 8v8"/></svg>

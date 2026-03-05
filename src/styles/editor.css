@@ -168,7 +168,7 @@
 
 .crop-actions button {
   padding: 6px 16px;
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 600;
@@ -179,11 +179,21 @@
 .crop-actions .crop-apply {
   background: var(--accent-green);
   color: #000;
+  border-color: var(--accent-green);
+}
+
+.crop-actions .crop-apply:hover {
+  opacity: 0.85;
 }
 
 .crop-actions .crop-cancel {
   background: var(--bg-elevated);
   color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.crop-actions .crop-cancel:hover {
+  background: var(--bg-hover);
 }
 
 /* Text input overlay for text tool */

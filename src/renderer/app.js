@@ -72,6 +72,11 @@ const App = {
         const hiddenBtn = document.getElementById('hiddenFolderBtn');
         if (hiddenBtn) hiddenBtn.classList.remove('hidden');
       }
+      // First launch tutorial
+      if (!savedSettings.tutorialShown) {
+        Dialogs.showTutorial();
+        await ucb.saveSettings({ tutorialShown: 'true' });
+      }
       console.log('[App] Init complete');
     } catch (e) {
       console.error('[App] Init failed:', e);
@@ -145,6 +150,7 @@ const App = {
 
     // Bottom buttons
     document.getElementById('hiddenFolderBtn').addEventListener('click', () => Dialogs.showPasscodeDialog());
+    document.getElementById('helpBtn').addEventListener('click', () => Dialogs.showTutorial());
     document.getElementById('actionHistoryBtn').addEventListener('click', () => this.showActionHistory());
     document.getElementById('settingsBtn').addEventListener('click', () => this.toggleSettings());
     document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
@@ -537,7 +543,13 @@ const App = {
     addBtn.className = 'pinned-folder-add';
     addBtn.id = 'addPinnedFolderBtn';
     addBtn.title = 'Pin a folder';
-    addBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>';
+    addBtn.innerHTML = `
+      <div class="pinned-folder-icon-wrap">
+        <div class="pinned-folder-svg-wrap">
+          <svg class="folder-svg-icon" viewBox="0 -960 960 960" fill="var(--text-muted)"><path d="M575.38-340h30.77v-84.62h84.62v-30.76h-84.62V-540h-30.77v84.62h-84.61v30.76h84.61V-340Zm-400 140q-23.05 0-39.22-16.19Q120-232.38 120-255.38v-449.24q0-23 16.16-39.19Q152.33-760 175.38-760h217.93l70.77 70.77h320.54q23 0 39.19 16.19Q840-656.85 840-633.85v378.47q0 23-16.19 39.19Q807.62-200 784.62-200H175.38Zm0-30.77h609.24q10.76 0 17.69-6.92 6.92-6.93 6.92-17.69v-378.47q0-10.77-6.92-17.69-6.93-6.92-17.69-6.92H452.15l-70.77-70.77h-206q-10.76 0-17.69 6.92-6.92 6.93-6.92 17.69v449.24q0 10.76 6.92 17.69 6.93 6.92 17.69 6.92Zm-24.61 0V-729.23-230.77Z"/></svg>
+        </div>
+      </div>
+      <div class="pinned-folder-details"><div class="pinned-folder-card-count">New Folder</div></div>`;
     addBtn.addEventListener('click', () => Dialogs.showNewFolderDialog());
     container.appendChild(addBtn);
     // Update scroll fades
@@ -852,15 +864,15 @@ const App = {
   },
 
   showSortBar(label) {
-    document.getElementById('sortBackBtn').style.display = '';
+    document.getElementById('sortBackBtn').style.display = (label === 'All Clips') ? 'none' : '';
     document.getElementById('sortTitle').textContent = label;
     document.getElementById('sortTitle').style.display = '';
   },
 
   hideSortBarNav() {
     document.getElementById('sortBackBtn').style.display = 'none';
-    document.getElementById('sortTitle').textContent = '';
-    document.getElementById('sortTitle').style.display = 'none';
+    document.getElementById('sortTitle').textContent = 'All Clips';
+    document.getElementById('sortTitle').style.display = '';
   },
 
   applySortAndRender() {
@@ -894,8 +906,8 @@ const App = {
 
     const imageClips = this.allClips.filter(c => c.type === 'image');
     const textClips = this.allClips.filter(c => c.type !== 'image');
-    imgCount.textContent = imageClips.length;
-    txtCount.textContent = textClips.length;
+    imgCount.textContent = imageClips.length + ' Items';
+    txtCount.textContent = textClips.length + ' Items';
 
     const renderItem = (clip, list) => {
       const item = document.createElement('div');
@@ -976,7 +988,7 @@ const App = {
         <div class="group-item-icon">${g.icon}</div>
         <span class="group-item-name">${g.label}</span>
         <div class="group-item-thumbs">${thumbs}</div>
-        <span class="group-item-count">${clips.length}</span>
+        <span class="group-item-count">${clips.length} Items</span>
       `;
       item.addEventListener('click', () => {
         document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -997,7 +1009,7 @@ const App = {
     allItem.innerHTML = `
       <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg></div>
       <span class="group-item-name">All Clips</span>
-      <span class="group-item-count">${this.allClips.length}</span>
+      <span class="group-item-count">${this.allClips.length} Items</span>
     `;
     allItem.addEventListener('click', () => {
       document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -1030,7 +1042,7 @@ const App = {
         <div class="group-item-icon">${g.icon}</div>
         <span class="group-item-name">${g.label}</span>
         <div class="group-item-thumbs">${thumbs}</div>
-        <span class="group-item-count">${clips.length}</span>
+        <span class="group-item-count">${clips.length} Items</span>
       `;
       item.addEventListener('click', () => {
         document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -1184,11 +1196,25 @@ const App = {
       grid.appendChild(card);
     });
     this._applyLibGridMode();
+    this._updateClipAreaFades();
+  },
+
+  _updateClipAreaFades() {
+    const area = document.getElementById('clipArea');
+    const ft = document.getElementById('clipFadeTop');
+    const fb = document.getElementById('clipFadeBottom');
+    if (!area || !ft || !fb) return;
+    const update = () => {
+      ft.classList.toggle('visible', area.scrollTop > 8);
+      fb.classList.toggle('visible', area.scrollTop < area.scrollHeight - area.clientHeight - 8);
+    };
+    update();
+    area.removeEventListener('scroll', this._clipAreaScrollHandler);
+    this._clipAreaScrollHandler = update;
+    area.addEventListener('scroll', update);
   },
 
   async quickDeleteClip(clipId) {
-    const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
-    if (!confirmed) return;
     await ucb.deleteClip(clipId);
     this.clips = this.clips.filter(c => c.id !== clipId);
     this.allClips = this.allClips.filter(c => c.id !== clipId);
@@ -1273,10 +1299,18 @@ const App = {
     `;
 
     const editor = textView.querySelector('.md-editor');
-    editor.onblur = () => this.saveTextClipContent(clip.id, editor.innerText);
+    this._textSavedContent = content;
+    editor.onblur = () => {
+      this.saveTextClipContent(clip.id, editor.innerText);
+      this._textSavedContent = editor.innerText;
+      const ind = document.getElementById('unsavedIndicator');
+      if (ind) ind.style.display = 'none';
+    };
 
     // Track changes for undo/redo (debounced snapshot every 500ms of typing)
     editor.addEventListener('input', () => {
+      const ind = document.getElementById('unsavedIndicator');
+      if (ind) ind.style.display = (editor.innerText !== this._textSavedContent) ? '' : 'none';
       clearTimeout(this._textUndoTimer);
       this._textUndoTimer = setTimeout(() => {
         const current = editor.innerHTML;
@@ -1295,7 +1329,7 @@ const App = {
         this._textEditorUndo(editor);
       } else if (e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
-        this._textEditorUndo(editor);
+        this._textEditorRedo(editor);
       } else if (e.ctrlKey && e.key === 'y') {
         e.preventDefault();
         this._textEditorRedo(editor);
@@ -2117,6 +2151,24 @@ const App = {
     } catch (e) { console.error('Share link error:', e); this.toast('Link generation error', 'error'); }
   },
 
+  _simpleDiff(oldText, newText) {
+    const oldLines = (oldText || '').split('\n');
+    const newLines = (newText || '').split('\n');
+    const result = [];
+    const maxLines = Math.max(oldLines.length, newLines.length);
+    for (let i = 0; i < maxLines; i++) {
+      const ol = i < oldLines.length ? oldLines[i] : null;
+      const nl = i < newLines.length ? newLines[i] : null;
+      if (ol === nl) {
+        result.push({ type: 'same', text: ol });
+      } else {
+        if (ol !== null) result.push({ type: 'removed', text: ol });
+        if (nl !== null) result.push({ type: 'added', text: nl });
+      }
+    }
+    return result;
+  },
+
   async showClipHistory() {
     if (!this.activeClip) return;
     const history = await ucb.getClipHistory(this.activeClip.id);
@@ -2124,22 +2176,43 @@ const App = {
       this.toast('No edit history for this clip', 'info');
       return;
     }
+    const isImage = this.activeClip.type === 'image';
     const rows = history.map((h, i) => {
       const date = new Date(h.editedAt).toLocaleString();
-      const preview = h.content ? this.escapeHtml(h.content.substring(0, 80)) : (h.filePath ? `Image: ${h.filePath.split(/[\\/]/).pop()}` : 'Unknown');
-      return `<div class="history-item" data-idx="${i}" style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:var(--radius-sm);cursor:pointer;transition:var(--transition);border:1px solid var(--border);margin-bottom:4px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:11px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preview}</div>
-          <div style="font-size:9px;color:var(--text-muted)">${date}</div>
-        </div>
-        <button class="btn btn-secondary history-restore-btn" data-idx="${i}" style="font-size:10px;padding:3px 8px;flex-shrink:0">Restore</button>
-      </div>`;
+      if (isImage && h.filePath) {
+        const src = `file://${h.filePath.replace(/\\/g, '/')}`;
+        return `<div class="history-item" style="display:flex;align-items:center;gap:10px;padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:6px">
+          <img src="${src}" style="width:80px;height:56px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);flex-shrink:0;background:var(--bg-tertiary)" />
+          <div style="flex:1;min-width:0">
+            <div style="font-size:10px;color:var(--text-muted)">${date}</div>
+          </div>
+          <button class="btn btn-secondary history-restore-btn" data-idx="${i}" style="font-size:10px;padding:3px 8px;flex-shrink:0">Restore</button>
+        </div>`;
+      } else if (h.content) {
+        const currentContent = this.activeClip.content || '';
+        const diff = this._simpleDiff(h.content, currentContent);
+        const diffHtml = diff.slice(0, 8).map(d => {
+          const escaped = this.escapeHtml(d.text || '');
+          if (d.type === 'added') return `<div style="background:rgba(52,199,89,0.12);color:var(--accent-green);padding:1px 4px;border-radius:2px;font-size:10px;font-family:monospace;white-space:pre-wrap">+ ${escaped}</div>`;
+          if (d.type === 'removed') return `<div style="background:rgba(255,69,58,0.12);color:var(--accent-red);padding:1px 4px;border-radius:2px;font-size:10px;font-family:monospace;white-space:pre-wrap">- ${escaped}</div>`;
+          return `<div style="color:var(--text-muted);padding:1px 4px;font-size:10px;font-family:monospace;white-space:pre-wrap;opacity:0.5">&nbsp; ${escaped}</div>`;
+        }).join('');
+        const moreLines = diff.length > 8 ? `<div style="font-size:9px;color:var(--text-muted);padding:2px 4px">... ${diff.length - 8} more lines</div>` : '';
+        return `<div class="history-item" style="padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:6px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:10px;color:var(--text-muted)">${date}</div>
+            <button class="btn btn-secondary history-restore-btn" data-idx="${i}" style="font-size:10px;padding:3px 8px;flex-shrink:0">Restore</button>
+          </div>
+          <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px;max-height:120px;overflow-y:auto">${diffHtml}${moreLines}</div>
+        </div>`;
+      }
+      return '';
     }).join('');
 
     Dialogs.show(`
       <div class="modal-header"><h2>Edit History</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
-      <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">${history.length} version(s) saved for this clip. Click Restore to revert to a previous version.</p>
-      <div style="max-height:300px;overflow-y:auto">${rows}</div>
+      <p style="color:var(--text-secondary);font-size:11px;margin-bottom:12px">${history.length} version(s) saved. Click Restore to revert.</p>
+      <div style="max-height:400px;overflow-y:auto">${rows}</div>
       <div class="btn-row"><button class="btn btn-secondary" onclick="Dialogs.close()">Close</button></div>
     `);
 
@@ -2160,8 +2233,6 @@ const App = {
 
   async deleteActiveClip() {
     if (!this.activeClip) return;
-    const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
-    if (!confirmed) return;
     await ucb.deleteClip(this.activeClip.id);
     this.clips = this.clips.filter(c => c.id !== this.activeClip.id);
     this.allClips = this.allClips.filter(c => c.id !== this.activeClip.id);
@@ -2591,6 +2662,8 @@ const App = {
         <div class="setting-row"><label>Minimize to tray</label><label class="toggle"><input type="checkbox" id="settMinToTray" ${settings.minimizeToTray !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row"><label>Auto-OCR screenshots</label><label class="toggle"><input type="checkbox" id="settAutoOcr" ${settings.autoOcr === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Automatically extract text from screenshots so you can search text inside images.</p>
+        <div class="setting-row"><label>Intercept screenshots</label><label class="toggle"><input type="checkbox" id="settInterceptScreenshots" ${settings.interceptScreenshots !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">When enabled, screenshots are only saved inside the app. When disabled, a copy is also saved to your Windows Pictures/Screenshots folder.</p>
       </div>
       <div class="settings-section">
         <h3>Clipboard Capture</h3>
@@ -2630,9 +2703,26 @@ const App = {
       <div class="settings-section">
         <h3>AI Provider</h3>
         <div class="form-group"><label class="form-label">Provider</label><select class="form-select" id="settAIProvider"><option value="none" ${aiSettings.provider==='none'?'selected':''}>None</option><option value="openai" ${aiSettings.provider==='openai'?'selected':''}>OpenAI</option><option value="ollama" ${aiSettings.provider==='ollama'?'selected':''}>Ollama</option><option value="custom" ${aiSettings.provider==='custom'?'selected':''}>Custom</option></select></div>
+        <div id="ollamaSetupGroup" style="display:${aiSettings.provider==='ollama'?'block':'none'}">
+          <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <span style="font-size:12px;font-weight:600;color:var(--text-primary)">Ollama Status</span>
+              <span id="ollamaStatusBadge" style="font-size:10px;padding:2px 8px;border-radius:var(--radius-sm);background:var(--bg-hover);color:var(--text-muted)">Checking...</span>
+            </div>
+            <div id="ollamaSetupActions"></div>
+            <div id="ollamaProgress" style="display:none;margin-top:8px">
+              <div style="background:var(--bg-elevated);border-radius:4px;height:6px;overflow:hidden"><div id="ollamaProgressBar" style="height:100%;background:var(--accent-green);width:0%;transition:width 0.3s"></div></div>
+              <p id="ollamaProgressText" style="font-size:10px;color:var(--text-muted);margin-top:4px"></p>
+            </div>
+          </div>
+        </div>
         <div class="form-group" id="aiKeyGroup" style="display:${aiSettings.provider==='openai'||aiSettings.provider==='custom'?'block':'none'}"><label class="form-label">API Key</label><input type="password" class="form-input" id="settAIKey" value="${aiSettings.apiKey||''}" placeholder="sk-..." /></div>
         <div class="form-group"><label class="form-label">Model</label><input type="text" class="form-input" id="settAIModel" value="${aiSettings.model||''}" placeholder="gpt-4o-mini" /></div>
-        <div class="form-group" id="aiEndpointGroup" style="display:${aiSettings.provider==='ollama'||aiSettings.provider==='custom'?'block':'none'}"><label class="form-label">Endpoint</label><input type="text" class="form-input" id="settAIEndpoint" value="${aiSettings.endpoint||''}" placeholder="http://localhost:11434" /></div>
+        <div class="form-group" id="aiEndpointGroup" style="display:${aiSettings.provider==='ollama'||aiSettings.provider==='custom'?'block':'none'}"><label class="form-label">Endpoint</label><input type="text" class="form-input" id="settAIEndpoint" value="${aiSettings.endpoint||''}" placeholder="http://127.0.0.1:11434" /></div>
+        <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
+          <button class="btn btn-secondary" id="resetAIBtn" style="font-size:10px;color:var(--accent-red)">Disable AI Features</button>
+          <p style="font-size:10px;color:var(--text-muted);margin-top:4px">Sets the AI provider to None. To uninstall Ollama from your system, use Windows Settings &gt; Apps.</p>
+        </div>
       </div>
       <div class="btn-row"><button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button></div>
     `;
@@ -2696,7 +2786,11 @@ const App = {
       const v = e.target.value;
       document.getElementById('aiKeyGroup').style.display = (v==='openai'||v==='custom')?'block':'none';
       document.getElementById('aiEndpointGroup').style.display = (v==='ollama'||v==='custom')?'block':'none';
+      document.getElementById('ollamaSetupGroup').style.display = v==='ollama'?'block':'none';
+      if (v === 'ollama') this._checkOllamaStatus();
     });
+    // Check Ollama status on load if provider is ollama
+    if (aiSettings.provider === 'ollama') this._checkOllamaStatus();
     document.getElementById('changeDataDirBtn').addEventListener('click', async () => {
       const d = await ucb.chooseDirectory();
       if (d) document.getElementById('settDataDir').value = d;
@@ -2741,6 +2835,7 @@ const App = {
         hotkeyToggleApp: document.getElementById('settHotkeyToggleApp').dataset.accelerator || '',
         hotkeyScreenshot: document.getElementById('settHotkeyScreenshot').dataset.accelerator || '',
         hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || '',
+        interceptScreenshots: document.getElementById('settInterceptScreenshots').checked?'true':'false',
         experimentalHiddenFolder: document.getElementById('settHiddenFolder').checked?'true':'false'
       });
       // Auto-cleanup history based on setting
@@ -2753,6 +2848,17 @@ const App = {
         endpoint: document.getElementById('settAIEndpoint').value
       });
       this.toast('Settings saved', 'success');
+    });
+    document.getElementById('resetAIBtn').addEventListener('click', async () => {
+      document.getElementById('settAIProvider').value = 'none';
+      document.getElementById('settAIKey').value = '';
+      document.getElementById('settAIModel').value = '';
+      document.getElementById('settAIEndpoint').value = '';
+      await ucb.saveAISettings({ provider: 'none', apiKey: '', model: '', endpoint: '' });
+      document.getElementById('ollamaSetupGroup').style.display = 'none';
+      document.getElementById('aiKeyGroup').style.display = 'none';
+      document.getElementById('aiEndpointGroup').style.display = 'none';
+      this.toast('AI features disabled', 'info');
     });
   },
 
@@ -2828,8 +2934,6 @@ const App = {
       { label: 'Generate Link', action: () => { this.activeClip = clip; this.generateShareLink(); } },
       'separator',
       { label: 'Delete', danger: true, action: async () => {
-        const confirmed = await Dialogs.confirm('Delete Clip', 'Are you sure? The file will be moved to the Recycle Bin.');
-        if (!confirmed) return;
         await ucb.deleteClip(clip.id); this.allClips = this.allClips.filter(c => c.id !== clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
         this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer(); this.toast('Clip moved to Recycle Bin', 'info');
       }}
@@ -2933,9 +3037,9 @@ const App = {
       if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
       else { e.preventDefault(); this.performUndo(); }
     }
-    if (e.ctrlKey && e.shiftKey && e.key === 'Z') {
-      if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
-      else { e.preventDefault(); this.performUndo(); }
+    if (e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+      if (this.editorOpen && this.activeClip?.type === 'image') Editor.redo();
+      else { e.preventDefault(); this.performRedo(); }
     }
     if (e.ctrlKey && e.key === 'y') {
       if (this.editorOpen && this.activeClip?.type === 'image') Editor.redo();
@@ -3056,6 +3160,120 @@ const App = {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
+  },
+
+  async _checkOllamaStatus() {
+    const badge = document.getElementById('ollamaStatusBadge');
+    const actions = document.getElementById('ollamaSetupActions');
+    if (!badge || !actions) return;
+
+    badge.textContent = 'Checking...';
+    badge.style.background = 'var(--bg-hover)';
+    badge.style.color = 'var(--text-muted)';
+    actions.innerHTML = '';
+
+    try {
+      const status = await ucb.ollamaStatus();
+
+      if (!status.installed) {
+        badge.textContent = 'Not Installed';
+        badge.style.background = 'rgba(255,69,58,0.15)';
+        badge.style.color = 'var(--accent-red)';
+        actions.innerHTML = `
+          <p style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">Ollama is required for local AI features. Click below to download and install it automatically.</p>
+          <p style="font-size:10px;color:var(--text-muted);margin-bottom:8px">Download size: ~300 MB</p>
+          <button class="btn btn-primary" id="ollamaInstallBtn" style="font-size:11px">Download &amp; Install Ollama</button>
+        `;
+        document.getElementById('ollamaInstallBtn').addEventListener('click', () => this._installOllama());
+      } else if (!status.running) {
+        badge.textContent = 'Installed (Not Running)';
+        badge.style.background = 'rgba(255,159,10,0.15)';
+        badge.style.color = 'var(--accent-orange)';
+        actions.innerHTML = `
+          <p style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">Ollama is installed but not running.</p>
+          <button class="btn btn-primary" id="ollamaStartBtn" style="font-size:11px">Start Ollama</button>
+        `;
+        document.getElementById('ollamaStartBtn').addEventListener('click', async () => {
+          this.toast('Starting Ollama...', 'info');
+          const ok = await ucb.ollamaStart();
+          if (ok) { this.toast('Ollama started', 'success'); this._checkOllamaStatus(); }
+          else this.toast('Failed to start Ollama', 'error');
+        });
+      } else {
+        const modelList = status.models.length > 0 ? status.models.join(', ') : 'None';
+        badge.textContent = 'Running';
+        badge.style.background = 'rgba(52,199,89,0.15)';
+        badge.style.color = 'var(--accent-green)';
+        actions.innerHTML = `
+          <p style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">Models: ${modelList}</p>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <input type="text" class="form-input" id="ollamaPullModelInput" placeholder="e.g. llava, llama3" style="font-size:11px;padding:4px 8px;flex:1" />
+            <button class="btn btn-secondary" id="ollamaPullBtn" style="font-size:11px">Pull Model</button>
+          </div>
+          <p style="font-size:9px;color:var(--text-muted);margin-top:6px">Typical model sizes: llava ~4.7 GB · llama3 ~4.7 GB · mistral ~4.1 GB · phi3 ~2.2 GB · gemma ~5.0 GB</p>
+        `;
+        document.getElementById('ollamaPullBtn').addEventListener('click', async () => {
+          const model = document.getElementById('ollamaPullModelInput').value.trim();
+          if (!model) return;
+          this._showOllamaProgress(`Pulling ${model}...`, 0);
+          ucb.onOllamaPullProgress((p) => {
+            const text = p.status || '';
+            const pct = p.completed && p.total ? Math.round((p.completed / p.total) * 100) : 0;
+            this._showOllamaProgress(text, pct);
+          });
+          try {
+            await ucb.ollamaPullModel(model);
+            this._hideOllamaProgress();
+            this.toast(`Model "${model}" pulled successfully`, 'success');
+            this._checkOllamaStatus();
+          } catch (e) {
+            this._hideOllamaProgress();
+            this.toast(`Failed to pull model: ${e.message}`, 'error');
+          }
+        });
+      }
+    } catch (e) {
+      badge.textContent = 'Error';
+      badge.style.background = 'rgba(255,69,58,0.15)';
+      badge.style.color = 'var(--accent-red)';
+      actions.innerHTML = `<p style="font-size:11px;color:var(--accent-red)">Failed to check Ollama status: ${e.message}</p>`;
+    }
+  },
+
+  async _installOllama() {
+    this._showOllamaProgress('Downloading Ollama...', 0);
+    ucb.onOllamaDownloadProgress((p) => {
+      this._showOllamaProgress(`Downloading... ${p.percent}%`, p.percent);
+    });
+    try {
+      await ucb.ollamaDownload();
+      this._showOllamaProgress('Installing Ollama...', 100);
+      await ucb.ollamaInstall();
+      this._hideOllamaProgress();
+      this.toast('Ollama installed successfully!', 'success');
+      // Auto-start after install
+      await ucb.ollamaStart();
+      this._checkOllamaStatus();
+    } catch (e) {
+      this._hideOllamaProgress();
+      this.toast(`Ollama install failed: ${e.message}`, 'error');
+      this._checkOllamaStatus();
+    }
+  },
+
+  _showOllamaProgress(text, percent) {
+    const prog = document.getElementById('ollamaProgress');
+    const bar = document.getElementById('ollamaProgressBar');
+    const txt = document.getElementById('ollamaProgressText');
+    if (!prog) return;
+    prog.style.display = 'block';
+    if (bar) bar.style.width = percent + '%';
+    if (txt) txt.textContent = text;
+  },
+
+  _hideOllamaProgress() {
+    const prog = document.getElementById('ollamaProgress');
+    if (prog) prog.style.display = 'none';
   },
 
   _getDateLabel(timestamp) {

@@ -11,11 +11,14 @@ class AIEngine {
   }
 
   getSettings() {
+    let endpoint = this.db.getSetting('aiEndpoint') || 'http://127.0.0.1:11434';
+    // Normalize localhost to 127.0.0.1 to avoid IPv6 ::1 resolution issues
+    endpoint = endpoint.replace('localhost', '127.0.0.1');
     return {
       provider: this.db.getSetting('aiProvider') || 'ollama',
       apiKey: this.db.getSetting('aiApiKey') || '',
       model: this.db.getSetting('aiModel') || 'llava',
-      endpoint: this.db.getSetting('aiEndpoint') || 'http://127.0.0.1:11434'
+      endpoint
     };
   }
 
@@ -114,8 +117,9 @@ class AIEngine {
     });
 
     const client = url.protocol === 'https:' ? https : http;
+    const reqOpts = { hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, family: 4 };
     return new Promise((resolve) => {
-      const req = client.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+      const req = client.request(reqOpts, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
@@ -125,7 +129,10 @@ class AIEngine {
           } catch { resolve({ error: 'Failed to parse Ollama response' }); }
         });
       });
-      req.on('error', e => resolve({ error: `Ollama not reachable: ${e.message}` }));
+      req.on('error', e => {
+        if (e.code === 'ECONNREFUSED') resolve({ error: 'Ollama not reachable. Make sure Ollama is running (ollama serve).' });
+        else resolve({ error: `Ollama error: ${e.message}` });
+      });
       req.write(body);
       req.end();
     });
@@ -244,8 +251,9 @@ class AIEngine {
     });
 
     const client = url.protocol === 'https:' ? https : http;
+    const reqOpts = { hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, family: 4 };
     return new Promise((resolve) => {
-      const req = client.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+      const req = client.request(reqOpts, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
@@ -255,7 +263,10 @@ class AIEngine {
           } catch { resolve({ error: 'Failed to parse Ollama response' }); }
         });
       });
-      req.on('error', e => resolve({ error: `Ollama not reachable: ${e.message}` }));
+      req.on('error', e => {
+        if (e.code === 'ECONNREFUSED') resolve({ error: 'Ollama not reachable. Make sure Ollama is running (ollama serve).' });
+        else resolve({ error: `Ollama error: ${e.message}` });
+      });
       req.write(body);
       req.end();
     });

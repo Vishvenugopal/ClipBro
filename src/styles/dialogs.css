@@ -128,7 +128,7 @@
 /* Buttons */
 .btn {
   padding: 8px 16px;
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 600;
@@ -142,16 +142,18 @@
 .btn-primary {
   background: var(--accent-green);
   color: #000;
+  border-color: var(--accent-green);
 }
 
 .btn-primary:hover {
   opacity: 0.85;
-  box-shadow: 0 4px 12px rgba(76,217,100,0.3);
+  box-shadow: 0 4px 12px rgba(52,199,89,0.3);
 }
 
 .btn-secondary {
   background: var(--bg-elevated);
   color: var(--text-primary);
+  border-color: var(--border-light);
 }
 
 .btn-secondary:hover {
@@ -161,6 +163,7 @@
 .btn-danger {
   background: var(--accent-red);
   color: #fff;
+  border-color: var(--accent-red);
 }
 
 .btn-danger:hover {

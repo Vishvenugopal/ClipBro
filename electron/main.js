@@ -10,6 +10,7 @@ const ClipDatabase = require('./database');
 const ShareServer = require('./share-server');
 const AIEngine = require('./ai-engine');
 const FileManager = require('./file-manager');
+const OllamaManager = require('./ollama-manager');
 
 let mainWindow = null;
 let tray = null;
@@ -19,6 +20,7 @@ let db = null;
 let shareServer = null;
 let aiEngine = null;
 let fileManager = null;
+let ollamaManager = null;
 let isQuitting = false;
 
 const DATA_DIR = path.join(app.getPath('userData'), 'UniversalClipboard');
@@ -384,6 +386,31 @@ function setupIPC() {
     return aiEngine.saveSettings(settings);
   });
 
+  // Ollama management
+  ipcMain.handle('ollama-status', async () => {
+    return ollamaManager.getStatus();
+  });
+
+  ipcMain.handle('ollama-download', async () => {
+    return ollamaManager.download((progress) => {
+      if (mainWindow) mainWindow.webContents.send('ollama-download-progress', progress);
+    });
+  });
+
+  ipcMain.handle('ollama-install', async () => {
+    return ollamaManager.install();
+  });
+
+  ipcMain.handle('ollama-start', async () => {
+    return ollamaManager.startServer();
+  });
+
+  ipcMain.handle('ollama-pull-model', async (_, modelName) => {
+    return ollamaManager.pullModel(modelName, (progress) => {
+      if (mainWindow) mainWindow.webContents.send('ollama-pull-progress', progress);
+    });
+  });
+
   // OCR / Text extraction
   ipcMain.handle('extract-text', async (_, clipId) => {
     const clip = db.getClip(clipId);
@@ -734,6 +761,9 @@ app.whenReady().then(async () => {
 
   // Initialize AI engine
   aiEngine = new AIEngine(db, CLIPS_DIR, DATA_DIR);
+
+  // Initialize Ollama manager
+  ollamaManager = new OllamaManager(DATA_DIR);
 
   // Setup IPC BEFORE creating window so handlers are ready when renderer loads
   setupIPC();

@@ -47,14 +47,18 @@ class ShareServer {
       const content = isImg
         ? `<img src="/share/${req.params.token}" style="width:100%;border-radius:12px" />`
         : `<pre style="padding:20px;white-space:pre-wrap">${(clip.content||'').replace(/</g,'&lt;')}</pre>`;
+      const copyScript = isImg
+        ? `async function copyClip(){try{const r=await fetch('/share/${req.params.token}');const b=await r.blob();await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);document.getElementById('copyBtn').textContent='Copied!';setTimeout(()=>document.getElementById('copyBtn').textContent='Copy to Clipboard',2000)}catch(e){alert('Copy failed: '+e.message)}}`
+        : `async function copyClip(){try{const r=await fetch('/share/${req.params.token}');const t=await r.text();await navigator.clipboard.writeText(t);document.getElementById('copyBtn').textContent='Copied!';setTimeout(()=>document.getElementById('copyBtn').textContent='Copy to Clipboard',2000)}catch(e){alert('Copy failed: '+e.message)}}`;
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shared Clip</title>
         <style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0a0a0f;color:#e0e0e0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-        .c{max-width:800px;width:100%;background:#1a1a2e;border-radius:16px;padding:32px}.btn{padding:10px 24px;border:none;border-radius:8px;color:#fff;cursor:pointer;text-decoration:none;font-weight:600}
-        .g{background:linear-gradient(135deg,#4cd964,#34c759)}.s{background:#2a2a3e}</style></head>
+        .c{max-width:800px;width:100%;background:#1a1a2e;border-radius:16px;padding:32px}.btn{padding:10px 24px;border:none;border-radius:8px;color:#fff;cursor:pointer;text-decoration:none;font-weight:600;display:inline-block}
+        .g{background:linear-gradient(135deg,#4cd964,#34c759)}.s{background:#2a2a3e}.b{background:#0a84ff}</style>
+        <script>${copyScript}</script></head>
         <body><div class="c"><h2 style="margin-bottom:16px">Universal Clipboard</h2>
         <div style="background:#0d0d1a;border-radius:12px;overflow:hidden;margin-bottom:16px">${content}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;color:#888;font-size:13px;margin-bottom:16px"><span>${clip.title||'Clip'}</span><span>Expires in ${mins}m</span></div>
-        <div style="display:flex;gap:12px"><a href="/download/${req.params.token}" class="btn g">Download</a><a href="/share/${req.params.token}" target="_blank" class="btn s">Open Raw</a></div>
+        <div style="display:flex;gap:12px"><a href="/download/${req.params.token}" class="btn g">Download</a><button id="copyBtn" class="btn b" onclick="copyClip()">Copy to Clipboard</button><a href="/share/${req.params.token}" target="_blank" class="btn s">Open Raw</a></div>
         </div></body></html>`);
     });
   }

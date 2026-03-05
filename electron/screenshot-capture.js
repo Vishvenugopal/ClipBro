@@ -1,6 +1,7 @@
-const { desktopCapturer, screen, BrowserWindow, nativeImage } = require('electron');
+const { desktopCapturer, screen, BrowserWindow, nativeImage, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 
 class ScreenshotCapture {
@@ -52,6 +53,9 @@ class ScreenshotCapture {
       // Auto-group
       this.db.autoGroupClips();
 
+      // Also save to Windows Screenshots folder if interception is disabled
+      this._maybeSaveToWindowsScreenshots(pngBuffer);
+
       // Notify renderer
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.webContents.send('screenshot-captured', clip);
@@ -64,6 +68,21 @@ class ScreenshotCapture {
     } catch (err) {
       console.error('Screenshot capture failed:', err);
       return null;
+    }
+  }
+
+  _maybeSaveToWindowsScreenshots(pngBuffer) {
+    try {
+      const settings = this.db.getSettings();
+      if (settings.interceptScreenshots === 'false') {
+        const ssDir = path.join(os.homedir(), 'Pictures', 'Screenshots');
+        if (!fs.existsSync(ssDir)) fs.mkdirSync(ssDir, { recursive: true });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const ssPath = path.join(ssDir, `Screenshot ${timestamp}.png`);
+        fs.writeFileSync(ssPath, pngBuffer);
+      }
+    } catch (e) {
+      console.error('Failed to save to Windows Screenshots:', e);
     }
   }
 
@@ -260,6 +279,7 @@ class ScreenshotCapture {
           });
 
           this.db.autoGroupClips();
+          this._maybeSaveToWindowsScreenshots(pngBuffer);
 
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('screenshot-captured', clip);

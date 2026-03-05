@@ -421,8 +421,63 @@ const Dialogs = {
   },
 
   // ===== AI Dialog =====
-  showAIDialog(clip) {
+  async showAIDialog(clip) {
     if (!clip) { App.toast('Select a clip first', 'info'); return; }
+
+    // Check if AI is configured
+    const aiSettings = await ucb.getAISettings();
+    if (!aiSettings || aiSettings.provider === 'none' || !aiSettings.provider) {
+      this.show(`
+        <div class="modal-header"><h2>AI Not Set Up</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">AI features are not configured yet. You can set up an AI provider (Ollama, OpenAI, or a custom endpoint) in Settings.</p>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
+          <button class="btn btn-primary" id="goToAISettingsBtn">Open Settings</button>
+        </div>
+      `);
+      document.getElementById('goToAISettingsBtn').addEventListener('click', () => {
+        Dialogs.close();
+        App.toggleSettings();
+      });
+      return;
+    }
+
+    // For Ollama, check if it's actually running
+    if (aiSettings.provider === 'ollama') {
+      try {
+        const status = await ucb.ollamaStatus();
+        if (!status.installed) {
+          this.show(`
+            <div class="modal-header"><h2>Ollama Not Installed</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">Ollama is selected as your AI provider but it is not installed. You can download and install it from Settings.</p>
+            <div class="btn-row">
+              <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
+              <button class="btn btn-primary" id="goToAISettingsBtn">Open Settings</button>
+            </div>
+          `);
+          document.getElementById('goToAISettingsBtn').addEventListener('click', () => {
+            Dialogs.close();
+            App.toggleSettings();
+          });
+          return;
+        }
+        if (!status.running) {
+          this.show(`
+            <div class="modal-header"><h2>Ollama Not Running</h2><button class="modal-close" onclick="Dialogs.close()">&times;</button></div>
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">Ollama is installed but the server is not running. You can start it from Settings.</p>
+            <div class="btn-row">
+              <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
+              <button class="btn btn-primary" id="goToAISettingsBtn">Open Settings</button>
+            </div>
+          `);
+          document.getElementById('goToAISettingsBtn').addEventListener('click', () => {
+            Dialogs.close();
+            App.toggleSettings();
+          });
+          return;
+        }
+      } catch (e) { /* proceed anyway */ }
+    }
 
     const isImage = clip.type === 'image';
     const defaultPrompt = isImage ? 'Describe this image in detail.' : 'Summarize this text.';
@@ -449,7 +504,7 @@ const Dialogs = {
       </div>
       <div class="btn-row" style="margin-bottom:12px">
         ${quickBtns}
-        <button class="btn btn-primary" id="aiAnalyzeBtn">Analyze</button>
+        <button class="btn btn-primary" id="aiAnalyzeBtn">Ask AI</button>
       </div>
       <div id="aiResultArea"></div>
     `);
@@ -458,7 +513,7 @@ const Dialogs = {
       const prompt = document.getElementById('aiPrompt').value.trim();
       if (!prompt) return;
 
-      document.getElementById('aiResultArea').innerHTML = '<div class="ai-loading"><div class="spinner"></div> Analyzing...</div>';
+      document.getElementById('aiResultArea').innerHTML = '<div class="ai-loading"><div class="spinner"></div> Thinking...</div>';
 
       const result = isImage
         ? await ucb.aiAnalyzeImage(clip.id, prompt)
@@ -504,5 +559,83 @@ const Dialogs = {
       App.toast('Selection copied', 'success');
       setTimeout(() => { App._ignoreClipboard = false; }, 2000);
     });
+  },
+
+  showTutorial() {
+    const kbd = (text) => `<kbd style="background:var(--bg-tertiary);border:1px solid var(--border);padding:2px 6px;border-radius:var(--radius-sm);font-family:inherit;font-size:10px;font-weight:600;color:var(--text-primary)">${text}</kbd>`;
+    const section = (icon, title, body) => `
+      <div style="display:flex;gap:12px;padding:12px;background:var(--bg-tertiary);border-radius:var(--radius-md);border:1px solid var(--border)">
+        <div style="flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center">${icon}</div>
+        <div style="min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px">${title}</div>
+          <div style="font-size:11px;color:var(--text-secondary);line-height:1.55">${body}</div>
+        </div>
+      </div>`;
+
+    this.show(`
+      <div class="modal-header">
+        <h2 style="font-size:15px">Welcome to Universal Clipboard</h2>
+        <button class="modal-close" onclick="Dialogs.close()">&times;</button>
+      </div>
+      <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 14px 0">Your screenshot manager and clipboard history, all in one place.</p>
+      <div style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px">
+
+        ${section(
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+          'Screenshot Management',
+          'Take screenshots the way you normally would. This app intercepts the ' + kbd('PrintScreen') + ' key and captures your screen directly. Screenshots are <strong>not</strong> saved to your Windows Screenshots folder. Instead, they are stored inside the app where you can edit, organize, and share them. You can also capture a selected region with ' + kbd('Ctrl+Shift+S') + '. You can change this behavior in Settings.'
+        )}
+
+        ${section(
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M17 3l4 4L7 21H3v-4L17 3z"/></svg>',
+          'Built-in Editor',
+          'Screenshots open in the editor automatically. Double-click any image to edit it later. Crop, draw, highlight, add arrows, text, blur sensitive areas, and more.'
+        )}
+
+        ${section(
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+          'Clipboard History',
+          'Everything you copy (text, images, links, code) is saved automatically. Browse your full history in the center grid or the recent clips sidebar.'
+        )}
+
+        ${section(
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
+          'Organize',
+          'Pin folders to the top bar, drag clips to sort them, filter by date or type from the sidebar, and star your favorites.'
+        )}
+
+        ${section(
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>',
+          'Sharing',
+          'Right-click a clip and choose "Share" to create a QR code or temporary link for other devices on your network.'
+        )}
+
+        <div style="background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.25);border-radius:var(--radius-md);padding:10px 12px">
+          <div style="font-size:11px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">Security Note</div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5">
+            Share links use your local IP address and are visible to <strong>anyone on the same Wi-Fi network</strong>.
+            Links expire after the time you set, but avoid sharing sensitive content on public networks.
+          </div>
+        </div>
+
+        <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px">
+          <div style="font-size:11px;font-weight:600;color:var(--text-primary);margin-bottom:8px">Keyboard Shortcuts</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;font-size:10px;color:var(--text-secondary)">
+            <span>${kbd('PrintScreen')} Screenshot</span>
+            <span>${kbd('Ctrl+Shift+S')} Select region</span>
+            <span>${kbd('Ctrl+Shift+V')} Show / hide app</span>
+            <span>${kbd('Ctrl+S')} Save edits</span>
+            <span>${kbd('Ctrl+Z')} Undo</span>
+            <span>${kbd('Ctrl+Shift+Z')} Redo</span>
+            <span>${kbd('Delete')} Delete clip</span>
+            <span>${kbd('Escape')} Close editor</span>
+          </div>
+        </div>
+
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px">
+        <button class="btn btn-primary" onclick="Dialogs.close()" style="font-size:12px;padding:6px 20px">Get Started</button>
+      </div>
+    `);
   }
 };

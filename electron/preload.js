@@ -54,6 +54,15 @@ contextBridge.exposeInMainWorld('ucb', {
   getAISettings: () => ipcRenderer.invoke('get-ai-settings'),
   saveAISettings: (settings) => ipcRenderer.invoke('save-ai-settings', settings),
 
+  // Ollama management
+  ollamaStatus: () => ipcRenderer.invoke('ollama-status'),
+  ollamaDownload: () => ipcRenderer.invoke('ollama-download'),
+  ollamaInstall: () => ipcRenderer.invoke('ollama-install'),
+  ollamaStart: () => ipcRenderer.invoke('ollama-start'),
+  ollamaPullModel: (model) => ipcRenderer.invoke('ollama-pull-model', model),
+  onOllamaDownloadProgress: (cb) => ipcRenderer.on('ollama-download-progress', (_, p) => cb(p)),
+  onOllamaPullProgress: (cb) => ipcRenderer.on('ollama-pull-progress', (_, p) => cb(p)),
+
   // OCR / QR detection
   extractText: (clipId) => ipcRenderer.invoke('extract-text', clipId),
   detectQR: (clipId) => ipcRenderer.invoke('detect-qr', clipId),
