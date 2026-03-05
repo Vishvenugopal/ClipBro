@@ -1,8 +1,8 @@
-# Universal Clipboard
+# ClipBro
 
-Powerful screenshot & clipboard manager for Windows, with easy file sharing to phones.
+A powerful screenshot & clipboard manager for Windows, with easy file sharing to phones!
 
-Automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
+ClipBro automatically captures copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
 
 ## Features
 
@@ -18,7 +18,7 @@ Automatically captures copied text, images, and links. Edit images with a full a
 - **Arrow / Rectangle** — annotation shapes
 - **Text** — add text overlays
 - **Blur** — pixelate sensitive regions
-- **Crop** — iPhone-style crop with drag handles
+- **Crop** — Simple cropping
 - **Eraser** — remove annotations
 - **Undo/Redo** — full history stack
 
