@@ -1,9 +1,14 @@
 
-# ![Logo](assets/clipbro-icons/Green%20Guy.png) ClipBro
+<h1>
+  <img src="assets/clipbro-icons/Green%20Guy.png" alt="Logo" height="32">
+  ClipBro
+</h1>
 
 A powerful screenshot & clipboard manager for Windows, with easy file sharing to phones!
 
-ClipBro automatically detects screenshots, copied text, images, and links. Edit images with a full annotation toolkit, organize clips into folders, and share via QR codes or temporary links.
+ClipBro automatically detects screenshots, copied text, images, links, and code. Comes with a well-equipped image and text editor, tons of organization features, and QR code/link generation!
+
+![Screenshot](assets/GitHub-Media/ClipBroDesktop2.png)
 
 ## Features
 
@@ -34,8 +39,7 @@ ClipBro automatically detects screenshots, copied text, images, and links. Edit 
 - **QR detection** — decode QR codes in images
 - **Providers** — Ollama (local), OpenAI, or custom OpenAI-compatible endpoints
 
-## How to Install
-Download the latest release (Windows only) from the right side of the screen in the Releases section.
+
 
 ## Keyboard Shortcuts
 
@@ -52,6 +56,11 @@ Global shortcuts are **configurable in Settings → Keyboard Shortcuts**. Defaul
 | `Ctrl+A` | Select all (in select mode) |
 | `Delete` | Delete selected clip(s) |
 | `Escape` | Close editor / exit select mode / clear hotkey field |
+
+## How to Install
+Download the latest release (Windows only) from the right side of the screen in the Releases section.
+
+<br><br>
 
 ## Setup
 
