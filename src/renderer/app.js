@@ -444,6 +444,13 @@ const App = {
         });
       }
     });
+
+    // Live filesystem updates — refresh explorer when watched directory changes
+    ucb.onFsChange((dirPath) => {
+      if (this.explorerPath && dirPath.replace(/\\/g, '/') === this.explorerPath.replace(/\\/g, '/')) {
+        this.refreshExplorer();
+      }
+    });
   },
 
   // ===== Select Mode =====
@@ -472,8 +479,10 @@ const App = {
     if (count === 0) return;
     const confirmed = await Dialogs.confirm(`Delete ${count} clip(s)?`, 'Files will be moved to the Recycle Bin.');
     if (!confirmed) return;
+    const deletedClips = [];
     for (const id of this.selectedClips) {
-      await ucb.deleteClip(id);
+      const clipData = await ucb.softDeleteClip(id);
+      if (clipData) deletedClips.push(clipData);
       this.closeTab(id);
     }
     this.clips = this.clips.filter(c => !this.selectedClips.has(c.id));
@@ -484,7 +493,12 @@ const App = {
     this.renderPinnedFolders();
     this.refreshExplorer();
     this.updateBulkUI();
-    this.toast(`${count} clip(s) moved to Recycle Bin`, 'info');
+    if (deletedClips.length > 0) {
+      this.pushUndo({ type: 'bulkDelete', entries: deletedClips });
+      this.toast(`${count} clip(s) deleted \u2014 press Ctrl+Z to undo`, 'info');
+    } else {
+      this.toast(`${count} clip(s) moved to Recycle Bin`, 'info');
+    }
   },
 
   async bulkMoveToFolder() {
@@ -632,7 +646,7 @@ const App = {
       paperClips.forEach(c => {
         papersHtml += `<div class="folder-paper"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
       });
-    } else if (folder.path && this._pinnedFolderThumbs && this._pinnedFolderThumbs[folder.id]) {
+    } else if (count > 0 && folder.path && this._pinnedFolderThumbs && this._pinnedFolderThumbs[folder.id] && this._pinnedFolderThumbs[folder.id].length > 0) {
       this._pinnedFolderThumbs[folder.id].forEach(p => {
         papersHtml += `<div class="folder-paper"><img src="file://${p.replace(/\\/g, '/')}" /></div>`;
       });
@@ -749,7 +763,7 @@ const App = {
       el.dataset.libTab = tab.id;
       const closable = tab.id !== 'all';
       const libTabIcons = {
-        'All Clips': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg>',
+        'All Clips': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
         'Today': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
         'Yesterday': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
         'This Week': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/></svg>',
@@ -922,7 +936,9 @@ const App = {
       }
 
       item.innerHTML = `
-        <div class="recent-clip-thumb">${thumbHtml}</div>
+        <div class="recent-clip-thumb">
+          ${thumbHtml}
+        </div>
         <div class="recent-clip-info">
           <div class="rc-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 32))}</div>
           <div class="rc-meta">${this.formatTime(clip.createdAt)}</div>
@@ -930,11 +946,18 @@ const App = {
         <button class="recent-clip-delete" data-clip-id="${clip.id}" title="Delete">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
         </button>
+        <button class="recent-clip-fav ${clip.favorite ? 'active' : ''}" data-clip-id="${clip.id}" title="Favorite">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="${clip.favorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        </button>
       `;
 
       item.querySelector('.recent-clip-delete').addEventListener('click', (e) => {
         e.stopPropagation();
         this.quickDeleteClip(clip.id);
+      });
+      item.querySelector('.recent-clip-fav').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleFavoriteById(clip.id);
       });
       item.addEventListener('click', () => {
         this.activeClip = clip;
@@ -963,6 +986,25 @@ const App = {
 
     imageClips.slice(0, 20).forEach(c => renderItem(c, imgList));
     textClips.slice(0, 20).forEach(c => renderItem(c, txtList));
+
+    // Update scroll-aware gradient fades for recent sections
+    this._updateRecentScrollFades();
+  },
+
+  _updateRecentScrollFades() {
+    document.querySelectorAll('.left-section-recent').forEach(section => {
+      const list = section.querySelector('.recent-clips-list');
+      if (!list) return;
+      const update = () => {
+        const canUp = list.scrollTop > 4;
+        const canDown = list.scrollTop < list.scrollHeight - list.clientHeight - 4;
+        section.classList.toggle('can-scroll-up', canUp);
+        section.classList.toggle('can-scroll-down', canDown);
+      };
+      update();
+      list.removeEventListener('scroll', update);
+      list.addEventListener('scroll', update);
+    });
   },
 
   renderDateGroups() {
@@ -1007,7 +1049,7 @@ const App = {
     const allItem = document.createElement('div');
     allItem.className = 'group-item group-item-all';
     allItem.innerHTML = `
-      <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 9h20"/><path d="M10 3v6"/></svg></div>
+      <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
       <span class="group-item-name">All Clips</span>
       <span class="group-item-count">${this.allClips.length} Items</span>
     `;
@@ -1215,7 +1257,7 @@ const App = {
   },
 
   async quickDeleteClip(clipId) {
-    await ucb.deleteClip(clipId);
+    const clipData = await ucb.softDeleteClip(clipId);
     this.clips = this.clips.filter(c => c.id !== clipId);
     this.allClips = this.allClips.filter(c => c.id !== clipId);
     this.closeTab(clipId);
@@ -1223,7 +1265,12 @@ const App = {
     this.renderLeftSidebar();
     this.renderPinnedFolders();
     this.refreshExplorer();
-    this.toast('Clip moved to Recycle Bin', 'info');
+    if (clipData) {
+      this.pushUndo({ type: 'delete', clipData, filePath: clipData.filePath });
+      this.toast('Clip deleted \u2014 press Ctrl+Z to undo', 'info');
+    } else {
+      this.toast('Clip moved to Recycle Bin', 'info');
+    }
   },
 
   // ===== Editor Panel (bottom sub-panel) =====
@@ -1613,7 +1660,7 @@ const App = {
     this.explorerHomePath = await ucb.getAppFolder();
     this.quickAccessPaths = await ucb.getQuickAccessPaths();
     this.renderQuickAccess();
-    this.navigateExplorer(this.explorerHomePath);
+    this.navigateExplorer(this.quickAccessPaths.appFolder || this.explorerHomePath);
   },
 
   renderQuickAccess() {
@@ -1646,7 +1693,7 @@ const App = {
     container.appendChild(sysHeader);
 
     const items = [
-      { label: 'Saved Clips', path: this.quickAccessPaths.clipsFolder, icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>', highlight: true },
+      { label: 'All Clips', path: this.quickAccessPaths.clipsFolder, icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>', highlight: true },
       { label: 'Desktop', path: this.quickAccessPaths.desktop, icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
       { label: 'Documents', path: this.quickAccessPaths.documents, icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg>' },
       { label: 'Downloads', path: this.quickAccessPaths.downloads, icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
@@ -1674,9 +1721,12 @@ const App = {
 
   async navigateExplorer(dirPath) {
     if (!dirPath) return;
+    // Unwatch previous directory and watch the new one
+    if (this.explorerPath) ucb.unwatchDirectory(this.explorerPath);
     this.explorerHistory.push(this.explorerPath);
     this.explorerForwardHistory = [];
     this.explorerPath = dirPath;
+    ucb.watchDirectory(dirPath);
     this.renderExplorerBreadcrumb();
     const entries = await ucb.listDirectory(dirPath);
     this.renderExplorerFiles(entries);
@@ -1684,18 +1734,22 @@ const App = {
 
   explorerGoBack() {
     if (this.explorerHistory.length === 0) return;
+    if (this.explorerPath) ucb.unwatchDirectory(this.explorerPath);
     this.explorerForwardHistory.push(this.explorerPath);
     const prev = this.explorerHistory.pop();
     this.explorerPath = prev;
+    ucb.watchDirectory(prev);
     this.renderExplorerBreadcrumb();
     ucb.listDirectory(prev).then(entries => this.renderExplorerFiles(entries));
   },
 
   explorerGoForward() {
     if (this.explorerForwardHistory.length === 0) return;
+    if (this.explorerPath) ucb.unwatchDirectory(this.explorerPath);
     this.explorerHistory.push(this.explorerPath);
     const next = this.explorerForwardHistory.pop();
     this.explorerPath = next;
+    ucb.watchDirectory(next);
     this.renderExplorerBreadcrumb();
     ucb.listDirectory(next).then(entries => this.renderExplorerFiles(entries));
   },
@@ -2233,7 +2287,7 @@ const App = {
 
   async deleteActiveClip() {
     if (!this.activeClip) return;
-    await ucb.deleteClip(this.activeClip.id);
+    const clipData = await ucb.softDeleteClip(this.activeClip.id);
     this.clips = this.clips.filter(c => c.id !== this.activeClip.id);
     this.allClips = this.allClips.filter(c => c.id !== this.activeClip.id);
     this.closeTab(this.activeClip.id);
@@ -2242,7 +2296,12 @@ const App = {
     this.renderLeftSidebar();
     this.renderPinnedFolders();
     this.refreshExplorer();
-    this.toast('Clip moved to Recycle Bin', 'info');
+    if (clipData) {
+      this.pushUndo({ type: 'delete', clipData, filePath: clipData.filePath });
+      this.toast('Clip deleted \u2014 press Ctrl+Z to undo', 'info');
+    } else {
+      this.toast('Clip moved to Recycle Bin', 'info');
+    }
   },
 
   async toggleFavoriteById(clipId) {
@@ -2285,8 +2344,18 @@ const App = {
 
   pushUndo(action) {
     this.undoStack.push(action);
+    // Clear redo stack — trash files from any evicted delete redos
+    for (const r of this.redoStack) {
+      if (r.type === 'delete' && r.filePath) ucb.trashClipFile(r.filePath);
+      if (r.type === 'bulkDelete' && r.entries) r.entries.forEach(c => { if (c.filePath) ucb.trashClipFile(c.filePath); });
+    }
     this.redoStack = [];
-    if (this.undoStack.length > 50) this.undoStack.shift();
+    if (this.undoStack.length > 50) {
+      const evicted = this.undoStack.shift();
+      // If a delete action falls off the undo stack, trash its file for real
+      if (evicted.type === 'delete' && evicted.filePath) ucb.trashClipFile(evicted.filePath);
+      if (evicted.type === 'bulkDelete' && evicted.entries) evicted.entries.forEach(c => { if (c.filePath) ucb.trashClipFile(c.filePath); });
+    }
   },
 
   async performUndo() {
@@ -2315,6 +2384,27 @@ const App = {
     } else if (action.type === 'bulkMove') {
       for (const e of action.entries) {
         await ucb.moveClipToFolder(e.clipId, e.oldFolderId);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'delete') {
+      // Restore the soft-deleted clip back into the database
+      const restored = await ucb.restoreClip(action.clipData);
+      if (restored) {
+        this.allClips.unshift(restored);
+        this.clips.unshift(restored);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'bulkDelete') {
+      for (const clipData of action.entries) {
+        const restored = await ucb.restoreClip(clipData);
+        if (restored) {
+          this.allClips.unshift(restored);
+          this.clips.unshift(restored);
+        }
       }
       await this.loadData();
       this.renderPinnedFolders();
@@ -2354,6 +2444,23 @@ const App = {
         await ucb.moveClipToFolder(e.clipId, action.newFolderId);
       }
       await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'delete') {
+      // Redo delete: soft-delete again
+      const clipData = await ucb.softDeleteClip(action.clipData.id);
+      if (clipData) action.clipData = clipData;
+      this.clips = this.clips.filter(c => c.id !== action.clipData.id);
+      this.allClips = this.allClips.filter(c => c.id !== action.clipData.id);
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'bulkDelete') {
+      for (const clipData of action.entries) {
+        await ucb.softDeleteClip(clipData.id);
+      }
+      const ids = new Set(action.entries.map(c => c.id));
+      this.clips = this.clips.filter(c => !ids.has(c.id));
+      this.allClips = this.allClips.filter(c => !ids.has(c.id));
       this.renderPinnedFolders();
       this.refreshExplorer();
     }
@@ -2966,26 +3073,7 @@ const App = {
 
     const items = [
       { label: folder.pinned ? 'Unpin' : 'Pin', action: async () => { await ucb.pinFolder(folder.id, !folder.pinned); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); }},
-      { label: 'Rename', action: async () => {
-        const newName = prompt('Rename folder:', folder.name);
-        if (newName && newName !== folder.name) {
-          await ucb.updateFolder(folder.id, { name: newName });
-          await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess();
-          this.toast('Folder renamed', 'success');
-        }
-      }},
-      { label: 'Change Color', action: async () => {
-        const input = document.createElement('input');
-        input.type = 'color'; input.value = folder.color || '#4cd964';
-        input.style.cssText = 'position:fixed;top:-9999px';
-        document.body.appendChild(input);
-        input.addEventListener('input', async () => {
-          await ucb.updateFolder(folder.id, { color: input.value });
-          await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess();
-        });
-        input.addEventListener('change', () => input.remove());
-        input.click();
-      }},
+      { label: 'Edit', action: () => { Dialogs.showEditFolderDialog(folder); }},
       { label: 'Open in File Explorer', action: () => { ucb.openInExplorer(folder.path || this.explorerHomePath); }},
       { label: 'Browse in Sidebar', action: () => { if (folder.path) this.navigateExplorer(folder.path); }},
       { label: 'Browse in Library', action: () => { if (folder.path) this.openFolderInLibrary(folder.path, folder.name); }},
@@ -3127,8 +3215,7 @@ const App = {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = 'toast success';
-    toast.style.cssText = 'display:flex;align-items:center;gap:8px';
-    toast.innerHTML = `<span style="flex:1">${this.escapeHtml(message)}</span><button style="background:rgba(255,255,255,0.2);border:none;color:inherit;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">Undo</button>`;
+    toast.innerHTML = `<span style="flex:1">${this.escapeHtml(message)}</span><button style="background:var(--bg-hover);border:1px solid var(--border-light);color:var(--accent-green);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">Undo</button>`;
     toast.querySelector('button').addEventListener('click', () => {
       this.performUndo();
       toast.remove();

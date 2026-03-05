@@ -23,6 +23,52 @@ let fileManager = null;
 let ollamaManager = null;
 let isQuitting = false;
 
+// Set app identity for Windows notifications
+app.setAppUserModelId('com.clipbro.app');
+
+// Filesystem watcher for live explorer updates
+const activeWatchers = new Map(); // dirPath -> fs.FSWatcher
+let watchDebounceTimers = new Map();
+
+function watchDirectory(dirPath) {
+  if (!dirPath || activeWatchers.has(dirPath)) return;
+  try {
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return;
+    const watcher = fs.watch(dirPath, { persistent: false }, (eventType, filename) => {
+      // Debounce rapid changes (e.g. temp files, multiple rename events)
+      const key = dirPath;
+      if (watchDebounceTimers.has(key)) clearTimeout(watchDebounceTimers.get(key));
+      watchDebounceTimers.set(key, setTimeout(() => {
+        watchDebounceTimers.delete(key);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('fs-change', dirPath);
+        }
+      }, 300));
+    });
+    watcher.on('error', () => { unwatchDirectory(dirPath); });
+    activeWatchers.set(dirPath, watcher);
+  } catch (e) {
+    console.warn('Failed to watch directory:', dirPath, e.message);
+  }
+}
+
+function unwatchDirectory(dirPath) {
+  const watcher = activeWatchers.get(dirPath);
+  if (watcher) {
+    watcher.close();
+    activeWatchers.delete(dirPath);
+  }
+}
+
+function unwatchAllDirectories() {
+  for (const [dirPath, watcher] of activeWatchers) {
+    watcher.close();
+  }
+  activeWatchers.clear();
+  for (const timer of watchDebounceTimers.values()) clearTimeout(timer);
+  watchDebounceTimers.clear();
+}
+
 const DATA_DIR = path.join(app.getPath('userData'), 'UniversalClipboard');
 const CLIPS_DIR = path.join(DATA_DIR, 'clips');
 const HIDDEN_DIR = path.join(DATA_DIR, '.hidden');
@@ -46,7 +92,7 @@ function createMainWindow() {
     transparent: false,
     backgroundColor: '#0a0a0f',
     show: false,
-    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
+    icon: path.join(__dirname, '..', 'assets', 'clipbro-icons', 'Green Guy.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -98,19 +144,24 @@ function createMainWindow() {
 }
 
 function createTray() {
-  const trayIconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
+  const trayIconPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'Green Guy.png');
   let trayIcon;
   if (fs.existsSync(trayIconPath)) {
     trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 });
   } else {
-    // Create a simple colored icon programmatically
-    trayIcon = nativeImage.createEmpty();
+    // Fallback to old path
+    const oldPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
+    if (fs.existsSync(oldPath)) {
+      trayIcon = nativeImage.createFromPath(oldPath).resize({ width: 16, height: 16 });
+    } else {
+      trayIcon = nativeImage.createEmpty();
+    }
   }
 
   tray = new Tray(trayIcon.isEmpty() ? createDefaultTrayIcon() : trayIcon);
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open Universal Clipboard', click: () => showMainWindow() },
+    { label: 'Open ClipBro', click: () => showMainWindow() },
     { label: 'Take Screenshot', click: () => takeScreenshot() },
     { type: 'separator' },
     { label: 'Import from Clipboard', click: () => importFromClipboard() },
@@ -120,7 +171,7 @@ function createTray() {
     { label: 'Quit', click: () => { isQuitting = true; app.quit(); } }
   ]);
 
-  tray.setToolTip('Universal Clipboard');
+  tray.setToolTip('ClipBro');
   tray.setContextMenu(contextMenu);
   tray.on('double-click', () => showMainWindow());
 }
@@ -247,6 +298,28 @@ function setupIPC() {
       try { await shell.trashItem(clip.filePath); } catch (e) { console.warn('Could not trash clip file:', e.message); }
     }
     return db.deleteClip(id);
+  });
+
+  // Soft-delete: remove from DB but keep file (returns full clip data for undo)
+  ipcMain.handle('soft-delete-clip', async (_, id) => {
+    const clip = db.getClip(id);
+    if (!clip) return null;
+    db.deleteClip(id);
+    return clip; // caller keeps this for potential restore
+  });
+
+  // Restore a previously soft-deleted clip (re-insert into DB)
+  ipcMain.handle('restore-clip', async (_, clipData) => {
+    return db.saveClip(clipData);
+  });
+
+  // Hard-delete: trash the file only (DB already cleared by soft-delete)
+  ipcMain.handle('trash-clip-file', async (_, filePath) => {
+    const { shell } = require('electron');
+    if (filePath && fs.existsSync(filePath)) {
+      try { await shell.trashItem(filePath); } catch (e) { console.warn('Could not trash clip file:', e.message); }
+    }
+    return true;
   });
 
   ipcMain.handle('update-clip', async (_, id, updates) => {
@@ -630,7 +703,7 @@ function setupIPC() {
       }
       // Fallback: use Windows credential prompt via PowerShell
       const { exec } = require('child_process');
-      const psScript = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync('Universal Clipboard').AsTask().GetAwaiter().GetResult()`;
+      const psScript = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync('ClipBro').AsTask().GetAwaiter().GetResult()`;
       const result = await new Promise((resolve, reject) => {
         exec(
           `powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`,
@@ -703,6 +776,17 @@ function setupIPC() {
       console.error('read-text-file error:', e.message);
       return '';
     }
+  });
+
+  // Filesystem watching for live explorer updates
+  ipcMain.handle('watch-directory', async (_, dirPath) => {
+    watchDirectory(dirPath);
+    return true;
+  });
+
+  ipcMain.handle('unwatch-directory', async (_, dirPath) => {
+    unwatchDirectory(dirPath);
+    return true;
   });
 
   // Get app's default folder path
@@ -794,6 +878,7 @@ app.on('before-quit', () => {
   isQuitting = true;
   if (clipboardMonitor) clipboardMonitor.stop();
   if (shareServer) shareServer.stop();
+  unwatchAllDirectories();
   globalShortcut.unregisterAll();
 });
 

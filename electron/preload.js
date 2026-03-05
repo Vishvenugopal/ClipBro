@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld('ucb', {
   exportClip: (clipId, destPath) => ipcRenderer.invoke('export-clip', clipId, destPath),
   saveClipAs: (clipId) => ipcRenderer.invoke('save-clip-as', clipId),
 
+  // Soft delete / restore for undo
+  softDeleteClip: (id) => ipcRenderer.invoke('soft-delete-clip', id),
+  restoreClip: (clipData) => ipcRenderer.invoke('restore-clip', clipData),
+  trashClipFile: (filePath) => ipcRenderer.invoke('trash-clip-file', filePath),
+
   // Clipboard
   copyToClipboard: (clipId) => ipcRenderer.invoke('copy-to-clipboard', clipId),
   pasteFromClipboard: () => ipcRenderer.invoke('paste-from-clipboard'),
@@ -101,6 +106,13 @@ contextBridge.exposeInMainWorld('ucb', {
   openInExplorer: (filePath) => ipcRenderer.invoke('open-in-explorer', filePath),
   copyClipToPath: (clipId, destDir) => ipcRenderer.invoke('copy-clip-to-path', clipId, destDir),
   readTextFile: (filePath) => ipcRenderer.invoke('read-text-file', filePath),
+
+  // Filesystem watching
+  watchDirectory: (dirPath) => ipcRenderer.invoke('watch-directory', dirPath),
+  unwatchDirectory: (dirPath) => ipcRenderer.invoke('unwatch-directory', dirPath),
+  onFsChange: (callback) => {
+    ipcRenderer.on('fs-change', (_, dirPath) => callback(dirPath));
+  },
 
   // Events from main process
   onNewClip: (callback) => {

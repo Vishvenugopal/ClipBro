@@ -118,10 +118,13 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .sidebar-search svg { color:var(--text-muted); flex-shrink:0; }
 
 .left-section { display:flex; flex-direction:column; flex-shrink:0; }
-.left-section.left-section-recent { flex:1 1 0; min-height:50px; max-height:30%; overflow:hidden; position:relative; border-bottom:1px solid var(--border); }
-.left-section.left-section-text { max-height:25%; flex:1 1 auto; }
+.left-section.left-section-recent { flex:1 1 0; min-height:50px; overflow:hidden; position:relative; border-bottom:1px solid var(--border); }
+.left-section.left-section-text { flex:1 1 0; min-height:50px; }
 .left-groups { flex-shrink:0; display:flex; flex-direction:column; padding-bottom:0; border-top:1px solid var(--border); margin-top:auto; }
-.left-section-recent::after { content:''; position:absolute; bottom:0; left:0; right:0; height:16px; background:linear-gradient(transparent, var(--bg-secondary)); pointer-events:none; z-index:1; }
+.left-section-recent::before { content:''; position:absolute; top:18px; left:0; right:0; height:20px; background:linear-gradient(var(--bg-secondary), transparent); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); -webkit-mask-image:linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); mask-image:linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); pointer-events:none; z-index:1; display:none; }
+.left-section-recent::after { content:''; position:absolute; bottom:0; left:0; right:0; height:20px; background:linear-gradient(transparent, var(--bg-secondary)); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); -webkit-mask-image:linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); mask-image:linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); pointer-events:none; z-index:1; display:none; }
+.left-section-recent.can-scroll-up::before { display:block; }
+.left-section-recent.can-scroll-down::after { display:block; }
 .left-section-header { display:flex; align-items:center; justify-content:space-between; padding:4px 12px 2px; flex-shrink:0; }
 .left-section-title { font-size:10px; font-weight:700; color:var(--text-muted); letter-spacing:1px; text-transform:uppercase; }
 .left-section-count { font-size:9px; background:var(--bg-tertiary); color:var(--text-muted); padding:1px 6px; border-radius:var(--radius-sm); }
@@ -143,9 +146,11 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .recent-clip-info { flex:1; min-width:0; }
 .recent-clip-info .rc-title { font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .recent-clip-info .rc-meta { font-size:9px; color:var(--text-muted); }
-.recent-clip-delete { position:absolute; right:4px; top:50%; transform:translateY(-50%); width:18px; height:18px; background:none; border:none; color:var(--text-muted); cursor:pointer; border-radius:50%; display:flex; align-items:center; justify-content:center; opacity:0; transition:var(--transition); }
-.recent-clip-item:hover .recent-clip-delete { opacity:0.7; }
-.recent-clip-delete:hover { opacity:1 !important; background:var(--accent-red); color:#fff; }
+.recent-clip-delete { position:absolute; top:4px; right:4px; width:18px; height:18px; background:rgba(0,0,0,0.7); border:none; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; color:#fff; opacity:0.6; transition:var(--transition); z-index:2; }
+.recent-clip-delete:hover { opacity:1; color:var(--accent-red); }
+.recent-clip-fav { position:absolute; bottom:4px; right:4px; width:18px; height:18px; background:rgba(0,0,0,0.7); border:none; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; cursor:pointer; opacity:0.6; transition:var(--transition); z-index:2; }
+.recent-clip-fav:hover { opacity:1; color:var(--accent-yellow); }
+.recent-clip-fav.active { color:var(--accent-yellow); opacity:1; }
 
 /* Groups list */
 .group-list { padding:2px 8px 2px; display:flex; flex-direction:column; gap:1px; }
@@ -203,7 +208,8 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .tab-action-btn.active { color:var(--accent-green); }
 
 /* Clip area */
-.clip-area { flex:1; overflow-y:auto; padding:12px; position:relative; min-height:0; }
+.clip-area-wrapper { flex:1; position:relative; min-height:0; overflow:hidden; }
+.clip-area { height:100%; overflow-y:auto; padding:12px; position:relative; }
 .clip-area::-webkit-scrollbar { width:6px; }
 .clip-area::-webkit-scrollbar-thumb { background:var(--border-light); border-radius:3px; }
 .clip-fade-top, .clip-fade-bottom { position:absolute; left:0; right:0; height:24px; pointer-events:none; z-index:3; display:none; }
@@ -230,7 +236,7 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 
 /* Always-visible delete button on card */
 .clip-card-delete { position:absolute; top:6px; left:6px; width:22px; height:22px; background:rgba(0,0,0,0.7); border:none; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; color:#fff; opacity:0.6; transition:var(--transition); z-index:2; }
-.clip-card-delete:hover { opacity:1; background:var(--accent-red); }
+.clip-card-delete:hover { opacity:1; color:var(--accent-red); }
 
 /* Select checkbox */
 .clip-card-select { position:absolute; top:6px; left:6px; width:22px; height:22px; background:rgba(0,0,0,0.5); border:2px solid rgba(255,255,255,0.4); border-radius:4px; display:flex; align-items:center; justify-content:center; z-index:2; }
@@ -238,7 +244,7 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 
 /* Favorite button */
 .clip-card-fav { position:absolute; top:6px; right:6px; width:22px; height:22px; background:rgba(0,0,0,0.7); border:none; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; cursor:pointer; opacity:0.6; transition:var(--transition); z-index:2; }
-.clip-card-fav:hover { opacity:1; }
+.clip-card-fav:hover { opacity:1; color:var(--accent-yellow); }
 .clip-card-fav.active { color:var(--accent-yellow); opacity:1; }
 
 /* Selection rectangle */
@@ -436,10 +442,14 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 
 /* ===== Toasts ===== */
 .toast-container { position:fixed; bottom:16px; right:16px; z-index:9999; display:flex; flex-direction:column-reverse; gap:8px; }
-.toast { padding:10px 16px; border-radius:var(--radius-md); font-size:12px; color:#fff; animation:toastIn 0.3s ease; max-width:300px; }
-.toast.success { background:rgba(52,199,89,0.9); }
-.toast.error { background:rgba(255,69,58,0.9); }
-.toast.info { background:rgba(10,132,255,0.9); }
+.toast { padding:10px 16px; border-radius:var(--radius-md); font-size:12px; color:var(--text-primary); animation:toastIn 0.3s ease; max-width:300px; background:var(--bg-elevated); border:1px solid var(--border-light); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); box-shadow:0 4px 20px rgba(0,0,0,0.4); display:flex; align-items:center; gap:8px; }
+.toast::before { content:''; width:3px; min-height:14px; border-radius:2px; flex-shrink:0; }
+.toast.success { border-color:rgba(52,199,89,0.25); }
+.toast.success::before { background:var(--accent-green); }
+.toast.error { border-color:rgba(255,69,58,0.25); }
+.toast.error::before { background:var(--accent-red); }
+.toast.info { border-color:rgba(10,132,255,0.25); }
+.toast.info::before { background:var(--accent-blue); }
 
 /* ===== Context menu ===== */
 .context-menu { position:fixed; z-index:100; background:var(--bg-elevated); border:1px solid var(--border-light); border-radius:var(--radius-md); padding:4px; min-width:180px; box-shadow:0 8px 32px rgba(0,0,0,0.4); }
@@ -454,8 +464,8 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 .btn-primary:hover { filter:brightness(1.1); }
 .btn-secondary { background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid var(--border); }
 .btn-secondary:hover { background:var(--bg-hover); color:var(--text-primary); }
-.btn-danger { background:var(--accent-red); color:#fff; font-weight:600; }
-.btn-danger:hover { filter:brightness(1.1); }
+.btn-danger { background:rgba(255,69,58,0.12); color:var(--accent-red); font-weight:600; border:1px solid rgba(255,69,58,0.35); }
+.btn-danger:hover { background:rgba(255,69,58,0.2); }
 
 /* Glow */
 .clip-glow { position:absolute; inset:-50px; pointer-events:none; filter:blur(40px); opacity:0.5; transition:all 1s ease; z-index:0; }

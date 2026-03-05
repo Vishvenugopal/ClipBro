@@ -1,4 +1,4 @@
-// ===== Universal Clipboard - Dialogs =====
+// ===== ClipBro - Dialogs =====
 
 const Dialogs = {
   show(html) {
@@ -65,11 +65,6 @@ const Dialogs = {
         </div>
         <input type="hidden" id="selectedFolderColor" value="${colors[Math.floor(Math.random() * colors.length)]}" />
       </div>
-      <div class="form-group">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-secondary)">
-          <input type="checkbox" id="newFolderPinned" checked /> Pin to top bar
-        </label>
-      </div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
         <button class="btn btn-primary" id="createFolderBtn">Create</button>
@@ -85,9 +80,8 @@ const Dialogs = {
       const name = document.getElementById('newFolderName').value.trim();
       if (!name) return;
       const color = document.getElementById('selectedFolderColor').value;
-      const pinned = document.getElementById('newFolderPinned').checked;
       const folderPath = document.getElementById('newFolderPath').value.trim();
-      await ucb.createFolder({ name, color, pinned, path: folderPath || null });
+      await ucb.createFolder({ name, color, pinned: true, path: folderPath || null });
       App.folders = await ucb.getFolders();
       App.renderPinnedFolders();
       App.renderQuickAccess();
@@ -97,6 +91,66 @@ const Dialogs = {
 
     document.getElementById('newFolderName').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('createFolderBtn').click();
+    });
+  },
+
+  // ===== Edit Folder =====
+  showEditFolderDialog(folder) {
+    const colors = [
+      '#2d8a4e','#c0392b','#c47200','#b8960f','#2980b9','#8e44ad','#c0294a',
+      '#1a5e32','#8b1a1a','#8a5200','#7a6400','#1a5276','#6c2d82','#8a1a38',
+      '#5dbe78','#e74c3c','#e8a317','#d4ac0d','#5dade2','#bb6bd9','#e84573'
+    ];
+    this.show(`
+      <div class="modal-header">
+        <h2>Edit Folder</h2>
+        <button class="modal-close" onclick="Dialogs.close()">&times;</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" class="form-input" id="editFolderName" value="${folder.name.replace(/"/g, '&quot;')}" autofocus />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Path</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" class="form-input" id="editFolderPath" value="${(folder.path || '').replace(/"/g, '&quot;')}" style="flex:1;font-size:11px" />
+          <button class="btn btn-secondary" id="browseEditFolderPathBtn" style="font-size:10px;padding:5px 8px">Browse</button>
+        </div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:2px">Filesystem directory for this folder</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;max-width:260px">
+          ${colors.map(c => `<button class="color-option" data-color="${c}" style="width:26px;height:26px;border-radius:50%;border:2px solid ${c === (folder.color || '') ? '#fff' : 'transparent'};background:${c};cursor:pointer" onclick="this.parentElement.querySelectorAll('.color-option').forEach(b=>b.style.borderColor='transparent');this.style.borderColor='#fff';document.getElementById('editFolderColor').value='${c}'"></button>`).join('')}
+        </div>
+        <input type="hidden" id="editFolderColor" value="${folder.color || colors[0]}" />
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
+        <button class="btn btn-primary" id="saveEditFolderBtn">Save</button>
+      </div>
+    `);
+
+    document.getElementById('browseEditFolderPathBtn').addEventListener('click', async () => {
+      const d = await ucb.chooseDirectory();
+      if (d) document.getElementById('editFolderPath').value = d;
+    });
+
+    document.getElementById('saveEditFolderBtn').addEventListener('click', async () => {
+      const name = document.getElementById('editFolderName').value.trim();
+      if (!name) return;
+      const color = document.getElementById('editFolderColor').value;
+      const folderPath = document.getElementById('editFolderPath').value.trim();
+      await ucb.updateFolder(folder.id, { name, color, path: folderPath || null });
+      await App.loadData();
+      App.renderPinnedFolders();
+      App.renderQuickAccess();
+      this.close();
+      App.toast('Folder updated', 'success');
+    });
+
+    document.getElementById('editFolderName').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('saveEditFolderBtn').click();
     });
   },
 
@@ -564,63 +618,63 @@ const Dialogs = {
   showTutorial() {
     const kbd = (text) => `<kbd style="background:var(--bg-tertiary);border:1px solid var(--border);padding:2px 6px;border-radius:var(--radius-sm);font-family:inherit;font-size:10px;font-weight:600;color:var(--text-primary)">${text}</kbd>`;
     const section = (icon, title, body) => `
-      <div style="display:flex;gap:12px;padding:12px;background:var(--bg-tertiary);border-radius:var(--radius-md);border:1px solid var(--border)">
-        <div style="flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center">${icon}</div>
+      <div style="display:flex;gap:10px;padding:8px 10px">
+        <div style="flex-shrink:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center">${icon}</div>
         <div style="min-width:0">
-          <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px">${title}</div>
-          <div style="font-size:11px;color:var(--text-secondary);line-height:1.55">${body}</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-primary);margin-bottom:2px">${title}</div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5">${body}</div>
         </div>
       </div>`;
 
     this.show(`
       <div class="modal-header">
-        <h2 style="font-size:15px">Welcome to Universal Clipboard</h2>
+        <h2 style="font-size:15px;display:flex;align-items:center;gap:8px"><img src="assets/clipbro-icons/Green Guy.png" width="22" height="22" style="border-radius:5px;object-fit:contain">Welcome to ClipBro!</h2>
         <button class="modal-close" onclick="Dialogs.close()">&times;</button>
       </div>
-      <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 14px 0">Your screenshot manager and clipboard history, all in one place.</p>
-      <div style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px">
+      <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 10px 0">A screenshot and clipboard manager.</p>
+      <div style="display:flex;flex-direction:column;gap:4px;padding-right:4px">
 
         ${section(
-          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
           'Screenshot Management',
           'Take screenshots the way you normally would. This app intercepts the ' + kbd('PrintScreen') + ' key and captures your screen directly. Screenshots are <strong>not</strong> saved to your Windows Screenshots folder. Instead, they are stored inside the app where you can edit, organize, and share them. You can also capture a selected region with ' + kbd('Ctrl+Shift+S') + '. You can change this behavior in Settings.'
         )}
 
         ${section(
-          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M17 3l4 4L7 21H3v-4L17 3z"/></svg>',
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M17 3l4 4L7 21H3v-4L17 3z"/></svg>',
           'Built-in Editor',
           'Screenshots open in the editor automatically. Double-click any image to edit it later. Crop, draw, highlight, add arrows, text, blur sensitive areas, and more.'
         )}
 
         ${section(
-          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
           'Clipboard History',
           'Everything you copy (text, images, links, code) is saved automatically. Browse your full history in the center grid or the recent clips sidebar.'
         )}
 
         ${section(
-          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
           'Organize',
           'Pin folders to the top bar, drag clips to sort them, filter by date or type from the sidebar, and star your favorites.'
         )}
 
         ${section(
-          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>',
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>',
           'Sharing',
           'Right-click a clip and choose "Share" to create a QR code or temporary link for other devices on your network.'
         )}
 
-        <div style="background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.25);border-radius:var(--radius-md);padding:10px 12px">
-          <div style="font-size:11px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">Security Note</div>
-          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5">
+        <div style="background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.25);border-radius:var(--radius-md);padding:8px 10px">
+          <div style="font-size:10px;font-weight:600;color:var(--accent-orange);margin-bottom:2px">Security Note</div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.4">
             Share links use your local IP address and are visible to <strong>anyone on the same Wi-Fi network</strong>.
             Links expire after the time you set, but avoid sharing sensitive content on public networks.
           </div>
         </div>
 
-        <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px">
-          <div style="font-size:11px;font-weight:600;color:var(--text-primary);margin-bottom:8px">Keyboard Shortcuts</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;font-size:10px;color:var(--text-secondary)">
+        <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 10px">
+          <div style="font-size:10px;font-weight:600;color:var(--text-primary);margin-bottom:6px">Keyboard Shortcuts</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:10px;color:var(--text-secondary)">
             <span>${kbd('PrintScreen')} Screenshot</span>
             <span>${kbd('Ctrl+Shift+S')} Select region</span>
             <span>${kbd('Ctrl+Shift+V')} Show / hide app</span>
@@ -633,8 +687,8 @@ const Dialogs = {
         </div>
 
       </div>
-      <div style="display:flex;justify-content:flex-end;margin-top:14px">
-        <button class="btn btn-primary" onclick="Dialogs.close()" style="font-size:12px;padding:6px 20px">Get Started</button>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px">
+        <button class="btn btn-secondary" onclick="Dialogs.close()" style="font-size:12px;padding:6px 20px;border-color:rgba(52,199,89,0.3);color:var(--accent-green);background:rgba(52,199,89,0.12)">Get Started</button>
       </div>
     `);
   }

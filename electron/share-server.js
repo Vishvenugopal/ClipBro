@@ -55,7 +55,7 @@ class ShareServer {
         .c{max-width:800px;width:100%;background:#1a1a2e;border-radius:16px;padding:32px}.btn{padding:10px 24px;border:none;border-radius:8px;color:#fff;cursor:pointer;text-decoration:none;font-weight:600;display:inline-block}
         .g{background:linear-gradient(135deg,#4cd964,#34c759)}.s{background:#2a2a3e}.b{background:#0a84ff}</style>
         <script>${copyScript}</script></head>
-        <body><div class="c"><h2 style="margin-bottom:16px">Universal Clipboard</h2>
+        <body><div class="c"><h2 style="margin-bottom:16px">ClipBro</h2>
         <div style="background:#0d0d1a;border-radius:12px;overflow:hidden;margin-bottom:16px">${content}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;color:#888;font-size:13px;margin-bottom:16px"><span>${clip.title||'Clip'}</span><span>Expires in ${mins}m</span></div>
         <div style="display:flex;gap:12px"><a href="/download/${req.params.token}" class="btn g">Download</a><button id="copyBtn" class="btn b" onclick="copyClip()">Copy to Clipboard</button><a href="/share/${req.params.token}" target="_blank" class="btn s">Open Raw</a></div>
@@ -100,7 +100,7 @@ class ShareServer {
     const url = await this.createTemporaryLink(clipId, 60);
     // Open default mail client with mailto link
     const { shell } = require('electron');
-    const subject = encodeURIComponent('Shared Clip - Universal Clipboard');
+    const subject = encodeURIComponent('Shared Clip - ClipBro');
     const body = encodeURIComponent(`Here's a clip shared with you:\n\n${url}\n\nThis link expires in 60 minutes.`);
     shell.openExternal(`mailto:${email}?subject=${subject}&body=${body}`);
     return { success: true, url };

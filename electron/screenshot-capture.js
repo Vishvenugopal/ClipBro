@@ -33,7 +33,8 @@ class ScreenshotCapture {
       if (image.isEmpty()) return null;
 
       const id = uuidv4();
-      const filePath = path.join(this.clipsDir, `${id}.png`);
+      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
+      const filePath = path.join(this.clipsDir, `Screenshot_${timestamp}.png`);
       const pngBuffer = image.toPNG();
       fs.writeFileSync(filePath, pngBuffer);
 
@@ -261,7 +262,8 @@ class ScreenshotCapture {
 
           const cropped = image.crop(cropRect);
           const id = uuidv4();
-          const filePath = path.join(this.clipsDir, `${id}.png`);
+          const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
+          const filePath = path.join(this.clipsDir, `Screenshot_${timestamp}.png`);
           const pngBuffer = cropped.toPNG();
           fs.writeFileSync(filePath, pngBuffer);
 

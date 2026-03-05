@@ -141,7 +141,7 @@ class ClipDatabase {
       'clipboardMonitoring': 'true', 'autoGroup': 'true',
       'screenshotFormat': 'png', 'maxClipAge': '0',
       'highlightSearchEnabled': 'false', 'shareServerPort': '19847',
-      'aiProvider': 'none', 'aiApiKey': '', 'aiModel': '', 'aiEndpoint': ''
+      'aiProvider': 'ollama', 'aiApiKey': '', 'aiModel': '', 'aiEndpoint': ''
     };
     for (const [key, value] of Object.entries(defaults)) {
       this.db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);
@@ -157,7 +157,7 @@ class ClipDatabase {
       const defaultPath = this.dataDir ? require('path').join(this.dataDir, 'UserFolders', 'My Folder') : null;
       if (defaultPath) {
         this.db.run('INSERT INTO folders (id, name, color, icon, pinned, sortOrder, path, createdAt) VALUES (?,?,?,?,?,?,?,?)',
-          [uuidv4(), 'My Folder', '#4cd964', 'folder', 1, 0, defaultPath, now]);
+          [uuidv4(), 'My Folder', '#2d8a4e', 'folder', 1, 0, defaultPath, now]);
       }
     }
 

@@ -13,21 +13,10 @@ ClipBro automatically detects screenshots, copied text, images, and links. Edit 
 - **Clipboard monitoring** — auto-captures copied text, images, links
 - **Import files** — drag-and-drop or file picker
 
-### Image Editing
-- **Draw/Pen** — freehand drawing with color & size controls
-- **Highlighter** — semi-transparent marker
-- **Arrow / Rectangle** — annotation shapes
-- **Text** — add text overlays
-- **Blur** — pixelate sensitive regions
-- **Crop** — Simple cropping
-- **Eraser** — remove annotations
-- **Undo/Redo** — full history stack
-
-### Text Editing
-- **Rich text toolbar** — bold, italic, underline, strikethrough, headings, lists, code, links
-- **Undo/Redo** — per-session undo stack with keyboard shortcuts
-- **Auto-save** — edits saved on blur
-- **Edit history** — automatic version snapshots with configurable auto-cleanup
+### Image and Text Editing
+- **Image Editing Tools:** — Draw, Highlighter, Arrow, Rectangle, Text, blur, Crop, Eraser
+- **Text Editing Tools:** — Rich Text: bold, italic, underline, strikethrough, headings, lists, code, links
+- **Edit History:** — Easily view edit versions to files with version snapshots and undo/redo between them
 
 ### Organization
 - **Folders** — color-coded, pinnable to top bar, drag clips to organize
@@ -40,7 +29,7 @@ ClipBro automatically detects screenshots, copied text, images, and links. Edit 
 - **Dual-panel layout** — editor panel above library panel, both visible simultaneously with resizable split
 
 ### Sharing
-- **QR Code** — generate QR codes for phone-to-PC transfer (same Wi-Fi required)
+- **QR Code** — generate QR codes for phone-to-PC transfer of screenshots/text (same Wi-Fi required)
 - **Temporary links** — expiring LAN links with copy button (same Wi-Fi required)
 
 ### AI

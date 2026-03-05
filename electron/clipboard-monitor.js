@@ -78,7 +78,8 @@ class ClipboardMonitor {
   handleImageClip(pngBuffer, size) {
     if (!this.saveImageClips) return;
     const id = uuidv4();
-    const filePath = path.join(this.clipsDir, `${id}.png`);
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
+    const filePath = path.join(this.clipsDir, `Image_${timestamp}.png`);
     fs.writeFileSync(filePath, pngBuffer);
 
     const clip = this.db.saveClip({
@@ -116,7 +117,8 @@ class ClipboardMonitor {
     }
 
     // Save text content to file as well
-    const filePath = path.join(this.clipsDir, `${id}.txt`);
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
+    const filePath = path.join(this.clipsDir, `Text_${timestamp}.txt`);
     fs.writeFileSync(filePath, text, 'utf-8');
 
     const clip = this.db.saveClip({
@@ -144,7 +146,7 @@ class ClipboardMonitor {
     const shouldNotify = isImage ? this.notifyImageClips : this.notifyTextClips;
     if (shouldNotify && Notification.isSupported()) {
       const opts = {
-        title: 'Universal Clipboard',
+        title: 'ClipBro',
         body: isImage ? `Image captured (${clip.title})` : `Clip captured: ${(clip.title || '').substring(0, 60)}`,
         silent: true
       };
@@ -155,6 +157,12 @@ class ClipboardMonitor {
         } catch (e) { /* ignore */ }
       }
       const notif = new Notification(opts);
+      notif.on('click', () => {
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.show();
+          this.mainWindow.focus();
+        }
+      });
       notif.show();
     }
 
