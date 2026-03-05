@@ -35,6 +35,7 @@
 .modal-header h2 {
   font-size: 16px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .modal-close {
@@ -212,8 +213,8 @@
 .share-option-icon.blue { background: rgba(90,200,250,0.15); color: var(--accent-blue); }
 .share-option-icon.orange { background: rgba(255,149,0,0.15); color: var(--accent-orange); }
 
-.share-option-text h3 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
-.share-option-text p { font-size: 11px; color: var(--text-muted); }
+.share-option-text h3 { font-size: 13px; font-weight: 600; margin-bottom: 2px; color: var(--text-primary); }
+.share-option-text p { font-size: 11px; color: var(--text-secondary); }
 
 /* QR Code Display */
 .qr-display {

@@ -209,6 +209,19 @@ function setupIPC() {
     return null;
   });
 
+  // Clip History (Edit Versioning)
+  ipcMain.handle('save-clip-version', async (_, clipId, content, filePath) => {
+    return db.saveClipVersion(clipId, content, filePath);
+  });
+
+  ipcMain.handle('get-clip-history', async (_, clipId) => {
+    return db.getClipHistory(clipId);
+  });
+
+  ipcMain.handle('cleanup-old-history', async (_, days) => {
+    return db.cleanupOldHistory(days);
+  });
+
   // Folders
   ipcMain.handle('get-folders', async () => {
     return db.getFolders();
@@ -224,6 +237,10 @@ function setupIPC() {
 
   ipcMain.handle('pin-folder', async (_, folderId, pinned) => {
     return db.pinFolder(folderId, pinned);
+  });
+
+  ipcMain.handle('update-folder', async (_, folderId, updates) => {
+    return db.updateFolder(folderId, updates);
   });
 
   ipcMain.handle('delete-folder', async (_, folderId) => {

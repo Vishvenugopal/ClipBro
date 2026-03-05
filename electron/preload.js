@@ -14,11 +14,17 @@ contextBridge.exposeInMainWorld('ucb', {
   updateClip: (id, updates) => ipcRenderer.invoke('update-clip', id, updates),
   getClipFilePath: (id) => ipcRenderer.invoke('get-clip-file-path', id),
 
+  // Clip History (Edit Versioning)
+  saveClipVersion: (clipId, content, filePath) => ipcRenderer.invoke('save-clip-version', clipId, content, filePath),
+  getClipHistory: (clipId) => ipcRenderer.invoke('get-clip-history', clipId),
+  cleanupOldHistory: (days) => ipcRenderer.invoke('cleanup-old-history', days),
+
   // Folders
   getFolders: () => ipcRenderer.invoke('get-folders'),
   createFolder: (data) => ipcRenderer.invoke('create-folder', data),
   moveClipToFolder: (clipId, folderId) => ipcRenderer.invoke('move-clip-to-folder', clipId, folderId),
   pinFolder: (folderId, pinned) => ipcRenderer.invoke('pin-folder', folderId, pinned),
+  updateFolder: (folderId, updates) => ipcRenderer.invoke('update-folder', folderId, updates),
   deleteFolder: (folderId) => ipcRenderer.invoke('delete-folder', folderId),
 
   // Hidden folder

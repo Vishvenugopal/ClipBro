@@ -435,6 +435,7 @@ const Dialogs = {
     document.getElementById('copyTextResultBtn').addEventListener('click', () => {
       App._ignoreClipboard = true;
       navigator.clipboard.writeText(text);
+      this.close();
       App.toast('Text copied to clipboard', 'success');
       setTimeout(() => { App._ignoreClipboard = false; }, 2000);
     });

@@ -40,9 +40,6 @@
     <!-- === Pinned Folders Bar (TOP — large, animated, peek thumbnails) === -->
     <div id="pinnedFoldersBar" class="pinned-folders-bar">
       <div id="pinnedFoldersList" class="pinned-folders-list"></div>
-      <button class="pinned-folder-add" id="addPinnedFolderBtn" title="Pin a folder">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
     </div>
 
     <!-- === Three-column body === -->
@@ -50,6 +47,7 @@
 
       <!-- LEFT SIDEBAR: Recent Clips + Groups -->
       <aside id="leftSidebar" class="left-sidebar">
+        <div class="sidebar-resize-handle" id="leftResizeHandle"></div>
         <div class="sidebar-search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
           <input type="text" id="searchInput" placeholder="Search... (type: date: from: to: is:fav)" />
@@ -93,68 +91,10 @@
         </div>
       </aside>
 
-      <!-- CENTER: Tab bar + Clip grid / Editor overlay -->
+      <!-- CENTER: Dual-panel layout (editor on top, library on bottom) -->
       <main id="centerPanel" class="center-panel">
-        <!-- Tab Bar -->
-        <div id="tabBar" class="tab-bar">
-          <div id="tabList" class="tab-list"></div>
-          <div class="tab-actions">
-            <button class="tab-action-btn" id="selectModeBtn" title="Select multiple">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-            </button>
-            <button class="tab-action-btn" id="importBtn" title="Paste from clipboard">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
-            </button>
-            <button class="tab-action-btn" id="importFileBtn" title="Import file">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            </button>
-            <button class="tab-action-btn" id="screenshotBtn" title="Screenshot">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
-            </button>
-          </div>
-        </div>
-
-        <!-- Sort bar (shown when viewing a filtered group) -->
-        <div id="sortBar" class="sort-bar" style="display:none">
-          <button class="sort-back-btn" id="sortBackBtn">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-            All Clips
-          </button>
-          <span id="sortTitle" style="flex:1;font-size:12px;font-weight:600;color:var(--text-primary)"></span>
-          <span class="sort-label">Sort:</span>
-          <select id="sortSelect">
-            <option value="newest">Newest First</option>
-            <option value="oldest">Oldest First</option>
-            <option value="az">A - Z</option>
-            <option value="za">Z - A</option>
-            <option value="largest">Largest</option>
-            <option value="smallest">Smallest</option>
-          </select>
-        </div>
-
-        <!-- Clip grid area -->
-        <div id="clipArea" class="clip-area">
-          <div id="emptyState" class="empty-state">
-            <div class="empty-icon">
-              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12h8M12 8v8"/></svg>
-            </div>
-            <h2>No clips yet</h2>
-            <p>Copy something, take a screenshot, or import a file to get started.</p>
-            <div class="empty-shortcuts">
-              <div class="shortcut"><kbd>PrintScreen</kbd> Screenshot</div>
-              <div class="shortcut"><kbd>Ctrl+Shift+S</kbd> Selection</div>
-              <div class="shortcut"><kbd>Ctrl+V</kbd> Paste</div>
-            </div>
-          </div>
-          <div id="clipGrid" class="clip-grid hidden"></div>
-          <div id="selectionRect" class="selection-rect hidden"></div>
-        </div>
-
-        <!-- Settings View (replaces grid when active) -->
-        <div id="settingsView" class="settings-view hidden"></div>
-
-        <!-- Editor Overlay (covers center when editing a clip) -->
-        <div id="editorOverlay" class="editor-overlay hidden">
+        <!-- TOP SUB-PANEL: Editor (shown when editing) -->
+        <div id="bottomPanel" class="center-sub-panel editor-panel hidden">
           <div class="editor-overlay-header">
             <span id="editorClipTitle" class="editor-clip-title">Editing</span>
             <button class="editor-close-btn" id="closeEditorBtn" title="Close editor">&times;</button>
@@ -224,15 +164,80 @@
           </div>
         </div>
 
-        <!-- Bulk action bar (shown during multi-select) -->
-        <div id="bulkBar" class="bulk-bar hidden">
-          <span id="bulkCount">0 selected</span>
-          <button class="btn btn-danger" id="bulkDeleteBtn">Delete Selected</button>
+        <!-- Panel resize handle (horizontal) -->
+        <div id="panelResizeHandle" class="panel-resize-handle hidden"></div>
+
+        <!-- BOTTOM SUB-PANEL: Clip grid / Group / Folder view (library) -->
+        <div id="topPanel" class="center-sub-panel" style="flex:1">
+          <!-- Tab Bar -->
+          <div id="tabBar" class="tab-bar">
+            <div id="tabList" class="tab-list"></div>
+            <div class="tab-actions">
+              <button class="tab-action-btn" id="selectModeBtn" title="Select multiple">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+              </button>
+              <button class="tab-action-btn" id="importBtn" title="Paste from clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+              </button>
+              <button class="tab-action-btn" id="importFileBtn" title="Import file">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </button>
+              <button class="tab-action-btn" id="screenshotBtn" title="Screenshot">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Sort bar (shown when viewing a filtered group) -->
+          <div id="sortBar" class="sort-bar" style="display:none">
+            <button class="sort-back-btn" id="sortBackBtn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+              All Clips
+            </button>
+            <span id="sortTitle" style="flex:1;font-size:12px;font-weight:600;color:var(--text-primary)"></span>
+            <span class="sort-label">Sort:</span>
+            <select id="sortSelect">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="az">A - Z</option>
+              <option value="za">Z - A</option>
+              <option value="largest">Largest</option>
+              <option value="smallest">Smallest</option>
+            </select>
+          </div>
+
+          <!-- Clip grid area -->
+          <div id="clipArea" class="clip-area">
+            <div id="emptyState" class="empty-state">
+              <div class="empty-icon">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12h8M12 8v8"/></svg>
+              </div>
+              <h2>No clips yet</h2>
+              <p>Copy something, take a screenshot, or import a file to get started.</p>
+              <div class="empty-shortcuts">
+                <div class="shortcut"><kbd>PrintScreen</kbd> Screenshot</div>
+                <div class="shortcut"><kbd>Ctrl+Shift+S</kbd> Selection</div>
+                <div class="shortcut"><kbd>Ctrl+V</kbd> Paste</div>
+              </div>
+            </div>
+            <div id="clipGrid" class="clip-grid hidden"></div>
+            <div id="selectionRect" class="selection-rect hidden"></div>
+          </div>
+
+          <!-- Settings View (replaces grid when active) -->
+          <div id="settingsView" class="settings-view hidden"></div>
+
+          <!-- Bulk action bar (shown during multi-select) -->
+          <div id="bulkBar" class="bulk-bar hidden">
+            <span id="bulkCount">0 selected</span>
+            <button class="btn btn-danger" id="bulkDeleteBtn">Delete Selected</button>
+          </div>
         </div>
       </main>
 
       <!-- RIGHT SIDEBAR: File Explorer -->
       <aside id="rightSidebar" class="right-sidebar">
+        <div class="sidebar-resize-handle" id="rightResizeHandle"></div>
         <div class="explorer-header">
           <button class="explorer-nav-btn" id="explorerHomeBtn" title="App home folder">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>

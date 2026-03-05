@@ -125,6 +125,15 @@ class ClipDatabase {
         createdAt INTEGER NOT NULL
       );
     `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS clip_history (
+        id TEXT PRIMARY KEY,
+        clipId TEXT NOT NULL,
+        content TEXT,
+        filePath TEXT,
+        editedAt INTEGER NOT NULL
+      );
+    `);
 
     // Default settings
     const defaults = {
@@ -253,10 +262,35 @@ class ClipDatabase {
 
   moveClipToFolder(clipId, folderId) { this._run('UPDATE clips SET folderId = ? WHERE id = ?', [folderId, clipId]); return true; }
   pinFolder(folderId, pinned) { this._run('UPDATE folders SET pinned = ? WHERE id = ?', [pinned ? 1 : 0, folderId]); return true; }
+  updateFolder(folderId, updates) {
+    const fields = Object.keys(updates);
+    const values = Object.values(updates);
+    const setClause = fields.map(f => `${f} = ?`).join(', ');
+    this._run(`UPDATE folders SET ${setClause} WHERE id = ?`, [...values, folderId]);
+    return this._get('SELECT * FROM folders WHERE id = ?', [folderId]);
+  }
 
   deleteFolder(folderId) {
     this._run('UPDATE clips SET folderId = NULL WHERE folderId = ?', [folderId]);
     this._run('DELETE FROM folders WHERE id = ?', [folderId]);
+    return true;
+  }
+
+  // ===== Clip History (Edit Versioning) =====
+  saveClipVersion(clipId, content, filePath) {
+    const id = uuidv4();
+    this._run('INSERT INTO clip_history (id, clipId, content, filePath, editedAt) VALUES (?,?,?,?,?)',
+      [id, clipId, content || null, filePath || null, Date.now()]);
+    return id;
+  }
+
+  getClipHistory(clipId) {
+    return this._all('SELECT * FROM clip_history WHERE clipId = ? ORDER BY editedAt DESC', [clipId]);
+  }
+
+  cleanupOldHistory(daysToKeep = 30) {
+    const cutoff = Date.now() - (daysToKeep * 86400000);
+    this._run('DELETE FROM clip_history WHERE editedAt < ?', [cutoff]);
     return true;
   }
 

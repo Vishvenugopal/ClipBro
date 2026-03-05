@@ -83,9 +83,6 @@ const App = {
     document.getElementById('importFileBtn').addEventListener('click', () => this.importFiles());
     document.getElementById('screenshotBtn').addEventListener('click', () => this.takeScreenshot());
 
-    // Pinned folder add
-    document.getElementById('addPinnedFolderBtn').addEventListener('click', () => Dialogs.showNewFolderDialog());
-
     // Pinned folder bar: accept folder drops from file explorer
     const pinBar = document.getElementById('pinnedFoldersBar');
     pinBar.addEventListener('dragover', (e) => {
@@ -176,6 +173,13 @@ const App = {
     // Paste
     document.addEventListener('paste', (e) => { e.preventDefault(); ucb.pasteFromClipboard(); });
 
+    // Sidebar resize handles
+    this.bindSidebarResize('leftResizeHandle', 'leftSidebar', 'left');
+    this.bindSidebarResize('rightResizeHandle', 'rightSidebar', 'right');
+
+    // Panel resize handle (horizontal, between top and bottom sub-panels)
+    this.bindPanelResize();
+
     // Drag select
     this.bindDragSelect();
   },
@@ -246,6 +250,59 @@ const App = {
     });
   },
 
+  bindSidebarResize(handleId, sidebarId, side) {
+    const handle = document.getElementById(handleId);
+    const sidebar = document.getElementById(sidebarId);
+    if (!handle || !sidebar) return;
+    let isResizing = false, startX, startW;
+    handle.addEventListener('mousedown', (e) => {
+      isResizing = true; startX = e.clientX; startW = sidebar.offsetWidth;
+      handle.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const diff = side === 'left' ? e.clientX - startX : startX - e.clientX;
+      const newW = Math.max(180, Math.min(450, startW + diff));
+      sidebar.style.width = newW + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (isResizing) { isResizing = false; handle.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
+    });
+  },
+
+  bindPanelResize() {
+    const handle = document.getElementById('panelResizeHandle');
+    const topPanel = document.getElementById('topPanel');
+    const bottomPanel = document.getElementById('bottomPanel');
+    const center = document.getElementById('centerPanel');
+    if (!handle) return;
+    let isResizing = false, startY, startTopH, startBotH;
+    handle.addEventListener('mousedown', (e) => {
+      if (bottomPanel.classList.contains('hidden')) return;
+      isResizing = true; startY = e.clientY;
+      startTopH = topPanel.offsetHeight; startBotH = bottomPanel.offsetHeight;
+      handle.classList.add('active');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const diff = e.clientY - startY;
+      const totalH = startTopH + startBotH;
+      const newTopH = Math.max(100, Math.min(totalH - 150, startTopH + diff));
+      const newBotH = totalH - newTopH;
+      topPanel.style.flex = `0 0 ${newTopH}px`;
+      bottomPanel.style.flex = `0 0 ${newBotH}px`;
+    });
+    document.addEventListener('mouseup', () => {
+      if (isResizing) { isResizing = false; handle.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; }
+    });
+  },
+
   bindIPC() {
     ucb.onNewClip(async (clip) => {
       // Ignore clips that were copied from inside the app
@@ -254,6 +311,7 @@ const App = {
       this.clips.unshift(clip);
       this.renderClipGrid();
       this.renderLeftSidebar();
+      this.renderPinnedFolders();
       this.toast('New clip captured', 'success');
       // Auto-OCR for images if enabled
       if (clip.type === 'image') this.autoOcrIfEnabled(clip);
@@ -265,6 +323,7 @@ const App = {
       }
       this.renderClipGrid();
       this.renderLeftSidebar();
+      this.renderPinnedFolders();
       // Auto-open editor for screenshots
       this.openEditor(clip);
       // Auto-OCR for screenshots if enabled
@@ -319,11 +378,18 @@ const App = {
     container.innerHTML = '';
     const pinned = this.folders.filter(f => f.pinned);
     if (pinned.length === 0 && this.folders.length > 0) {
-      // Show all folders if none pinned yet
       this.folders.forEach(f => this._renderPinnedCard(container, f));
     } else {
       pinned.forEach(f => this._renderPinnedCard(container, f));
     }
+    // Add button after last folder card
+    const addBtn = document.createElement('button');
+    addBtn.className = 'pinned-folder-add';
+    addBtn.id = 'addPinnedFolderBtn';
+    addBtn.title = 'Pin a folder';
+    addBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>';
+    addBtn.addEventListener('click', () => Dialogs.showNewFolderDialog());
+    container.appendChild(addBtn);
   },
 
   _renderPinnedCard(container, folder) {
@@ -331,35 +397,43 @@ const App = {
     card.className = 'pinned-folder-card';
     card.dataset.folderId = folder.id;
     const color = folder.color || '#4cd964';
-    card.style.background = color + '18';
-    card.style.borderColor = color + '30';
 
-    // Get folder clips for thumbnails
-    const folderClips = this.allClips.filter(c => c.folderId === folder.id).slice(0, 3);
-    let thumbsHtml = '';
-    if (folderClips.length > 0) {
-      thumbsHtml = folderClips.map(c => {
-        if (c.type === 'image' && c.filePath) {
-          return `<img src="file://${c.filePath.replace(/\\/g, '/')}" alt="" />`;
-        }
-        return `<div class="thumb-placeholder">Txt</div>`;
-      }).join('');
-    } else {
-      thumbsHtml = '<div class="thumb-placeholder">Empty</div>';
+    // Get ALL folder clips (not just 3)
+    const folderClips = this.allClips.filter(c => c.folderId === folder.id);
+    const count = folderClips.length;
+
+    // Papers behind the folder (recent clip thumbnails peeking out)
+    const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
+    let papersHtml = '';
+    paperClips.forEach((c, i) => {
+      const offset = (i - 1) * 6;
+      const rot = (i - 1) * 3;
+      papersHtml += `<div class="folder-paper" style="transform:rotate(${rot}deg) translateX(${offset}px)"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
+    });
+    if (paperClips.length === 0 && count > 0) {
+      papersHtml = '<div class="folder-paper"><div class="folder-paper-text">TXT</div></div>';
     }
 
-    const count = this.allClips.filter(c => c.folderId === folder.id).length;
-    const pinSvg = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><path d="M16 2L20.5 6.5L18 9L21 12L12 21L9 18L6.5 20.5L2 16L9 9L4 4L7 7L9 5L16 2Z"/></svg>';
+    // Folder SVG icon with color fill, name overlaid
+    const folderSvg = `<svg class="folder-svg-icon" viewBox="0 0 59 47" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="${color}"/>
+      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="rgba(255,255,255,0.08)"/>
+    </svg>`;
+
     const pathLabel = folder.path ? folder.path.replace(/\\/g, '/').split('/').slice(-2).join('/') : '';
 
     card.innerHTML = `
-      <div class="pinned-folder-card-name" style="color:${color}">
-        <span class="pinned-pin-icon">${pinSvg}</span>
-        ${this.escapeHtml(folder.name)}
+      <div class="pinned-folder-icon-wrap">
+        <div class="pinned-folder-papers">${papersHtml}</div>
+        <div class="pinned-folder-svg-wrap">
+          ${folderSvg}
+          <span class="pinned-folder-label">${this.escapeHtml(folder.name)}</span>
+        </div>
       </div>
-      <div class="pinned-folder-card-count">${count} item${count !== 1 ? 's' : ''}</div>
-      ${pathLabel ? `<div class="pinned-folder-card-path" title="${this.escapeHtml(folder.path || '')}">${this.escapeHtml(pathLabel)}</div>` : ''}
-      <div class="pinned-folder-card-thumbs">${thumbsHtml}</div>
+      <div class="pinned-folder-details">
+        <div class="pinned-folder-card-count">${count} item${count !== 1 ? 's' : ''}</div>
+        ${pathLabel ? `<div class="pinned-folder-card-path" title="${this.escapeHtml(folder.path || '')}">${this.escapeHtml(pathLabel)}</div>` : ''}
+      </div>
     `;
 
     // Make path copyable on click
@@ -410,7 +484,6 @@ const App = {
     this.clips = [...this.allClips];
     this.currentView = 'all';
     this.currentViewLabel = '';
-    this.closeEditor();
     document.getElementById('sortBar').style.display = 'none';
     this.renderClipGrid();
     document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -420,7 +493,6 @@ const App = {
     this.clips = filteredClips;
     this.currentView = 'filtered';
     this.currentViewLabel = label;
-    this.closeEditor();
     this.showSortBar(label);
     this.applySortAndRender();
   },
@@ -501,10 +573,10 @@ const App = {
     const now = Date.now();
     const day = 86400000;
     const dateGroups = [
-      { label: 'Today', filter: c => (now - c.createdAt) < day, icon: '📅', bg: 'rgba(90,200,250,0.15)' },
-      { label: 'Yesterday', filter: c => (now - c.createdAt) >= day && (now - c.createdAt) < day * 2, icon: '📆', bg: 'rgba(175,82,222,0.15)' },
-      { label: 'This Week', filter: c => (now - c.createdAt) >= day * 2 && (now - c.createdAt) < day * 7, icon: '🗓️', bg: 'rgba(255,149,0,0.15)' },
-      { label: 'Older', filter: c => (now - c.createdAt) >= day * 7, icon: '📁', bg: 'rgba(150,150,150,0.15)' }
+      { label: 'Today', filter: c => (now - c.createdAt) < day, icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
+      { label: 'Yesterday', filter: c => (now - c.createdAt) >= day && (now - c.createdAt) < day * 2, icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
+      { label: 'This Week', filter: c => (now - c.createdAt) >= day * 2 && (now - c.createdAt) < day * 7, icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/></svg>' },
+      { label: 'Older', filter: c => (now - c.createdAt) >= day * 7, icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M17 18l2 2" opacity="0.5"/></svg>' }
     ];
 
     dateGroups.forEach(g => {
@@ -515,10 +587,10 @@ const App = {
       const thumbs = clips.filter(c => c.type === 'image' && c.filePath).slice(0, 2)
         .map(c => `<img src="file://${c.filePath.replace(/\\/g, '/')}" />`).join('');
       item.innerHTML = `
-        <div class="group-item-icon" style="background:${g.bg};color:#fff;font-size:10px">${g.icon}</div>
+        <div class="group-item-icon">${g.icon}</div>
         <span class="group-item-name">${g.label}</span>
-        <span class="group-item-count">${clips.length}</span>
         <div class="group-item-thumbs">${thumbs}</div>
+        <span class="group-item-count">${clips.length}</span>
       `;
       item.addEventListener('click', () => {
         document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -537,7 +609,7 @@ const App = {
     const allItem = document.createElement('div');
     allItem.className = 'group-item group-item-all';
     allItem.innerHTML = `
-      <div class="group-item-icon" style="color:#fff;font-size:10px">📋</div>
+      <div class="group-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect x="13" y="2" width="9" height="9" rx="1.5"/><rect x="2" y="13" width="9" height="9" rx="1.5"/><rect x="13" y="13" width="9" height="9" rx="1.5"/></svg></div>
       <span class="group-item-name">All Clips</span>
       <span class="group-item-count">${this.allClips.length}</span>
     `;
@@ -549,16 +621,19 @@ const App = {
     container.appendChild(allItem);
 
     const typeGroups = [
-      { label: 'Images', type: 'image', icon: '🖼️', bg: 'rgba(76,217,100,0.15)' },
-      { label: 'Text', type: 'text', icon: '📝', bg: 'rgba(90,200,250,0.15)' },
-      { label: 'Links', type: 'link', icon: '🔗', bg: 'rgba(255,149,0,0.15)' },
-      { label: 'Code', type: 'code', icon: '💻', bg: 'rgba(175,82,222,0.15)' },
-      { label: 'Favorites', type: '_fav', icon: '⭐', bg: 'rgba(255,204,0,0.15)' }
+      { label: 'Favorites', type: '_fav', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="var(--accent-yellow)" stroke="var(--accent-yellow)" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' },
+      { label: 'Images', type: 'image', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>' },
+      { label: 'Text', type: 'text', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>' },
+      { label: 'Links', type: 'link', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-orange)" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' },
+      { label: 'Code', type: 'code', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>' },
+      { label: 'Other', type: '_other', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' }
     ];
 
     typeGroups.forEach(g => {
       const clips = g.type === '_fav'
         ? this.allClips.filter(c => c.favorite)
+        : g.type === '_other'
+        ? this.allClips.filter(c => !['image','text','link','code'].includes(c.type))
         : this.allClips.filter(c => c.type === g.type);
       if (clips.length === 0) return;
       const item = document.createElement('div');
@@ -566,10 +641,10 @@ const App = {
       const thumbs = clips.filter(c => c.type === 'image' && c.filePath).slice(0, 2)
         .map(c => `<img src="file://${c.filePath.replace(/\\/g, '/')}" />`).join('');
       item.innerHTML = `
-        <div class="group-item-icon" style="background:${g.bg};color:#fff;font-size:10px">${g.icon}</div>
+        <div class="group-item-icon">${g.icon}</div>
         <span class="group-item-name">${g.label}</span>
-        <span class="group-item-count">${clips.length}</span>
         <div class="group-item-thumbs">${thumbs}</div>
+        <span class="group-item-count">${clips.length}</span>
       `;
       item.addEventListener('click', () => {
         document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
@@ -679,7 +754,7 @@ const App = {
     this.toast('Clip deleted', 'info');
   },
 
-  // ===== Editor Overlay (opens over center panel) =====
+  // ===== Editor Panel (bottom sub-panel) =====
   openEditor(clip) {
     if (!this.openTabs.find(t => t.id === clip.id)) this.openTabs.push(clip);
     this.activeTabId = clip.id;
@@ -687,12 +762,14 @@ const App = {
     this.editorOpen = true;
     this.renderTabs();
 
-    const overlay = document.getElementById('editorOverlay');
+    const bottomPanel = document.getElementById('bottomPanel');
+    const resizeHandle = document.getElementById('panelResizeHandle');
     const canvas = document.getElementById('editorCanvas');
     const textView = document.getElementById('textClipView');
     const toolbar = document.getElementById('editorToolbar');
 
-    overlay.classList.remove('hidden');
+    bottomPanel.classList.remove('hidden');
+    resizeHandle.classList.remove('hidden');
     document.getElementById('editorClipTitle').textContent = clip.title || 'Untitled';
 
     // Reset both views first
@@ -717,6 +794,11 @@ const App = {
 
   _initTextEditor(textView, clip) {
     const content = clip.content || '';
+    // Undo/redo stack for this text editor session
+    this._textUndoStack = [content];
+    this._textRedoStack = [];
+    this._textUndoTimer = null;
+
     textView.innerHTML = `
       <div class="md-toolbar">
         <button class="md-btn" data-action="bold" title="Bold"><b>B</b></button>
@@ -731,6 +813,9 @@ const App = {
         <button class="md-btn" data-action="insertHorizontalRule" title="Divider">—</button>
         <span class="md-sep"></span>
         <button class="md-btn" data-action="createLink" title="Link">🔗</button>
+        <span class="md-sep"></span>
+        <button class="md-btn md-undo-btn" data-action="textUndo" title="Undo (Ctrl+Z)">↩</button>
+        <button class="md-btn md-redo-btn" data-action="textRedo" title="Redo (Ctrl+Y)">↪</button>
       </div>
       <div class="md-editor" contenteditable="true">${this.escapeHtml(content)}</div>
     `;
@@ -738,11 +823,41 @@ const App = {
     const editor = textView.querySelector('.md-editor');
     editor.onblur = () => this.saveTextClipContent(clip.id, editor.innerText);
 
+    // Track changes for undo/redo (debounced snapshot every 500ms of typing)
+    editor.addEventListener('input', () => {
+      clearTimeout(this._textUndoTimer);
+      this._textUndoTimer = setTimeout(() => {
+        const current = editor.innerText;
+        if (this._textUndoStack[this._textUndoStack.length - 1] !== current) {
+          this._textUndoStack.push(current);
+          this._textRedoStack = [];
+          if (this._textUndoStack.length > 100) this._textUndoStack.shift();
+        }
+      }, 500);
+    });
+
+    // Keyboard shortcuts for undo/redo within text editor
+    editor.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        this._textEditorUndo(editor);
+      } else if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
+        e.preventDefault();
+        this._textEditorRedo(editor);
+      }
+    });
+
     textView.querySelectorAll('.md-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         const action = btn.dataset.action;
-        if (action === 'heading') {
+        if (action === 'textUndo') {
+          this._textEditorUndo(editor);
+          return;
+        } else if (action === 'textRedo') {
+          this._textEditorRedo(editor);
+          return;
+        } else if (action === 'heading') {
           document.execCommand('formatBlock', false, 'h3');
         } else if (action === 'code') {
           const sel = window.getSelection();
@@ -763,14 +878,34 @@ const App = {
     });
   },
 
+  _textEditorUndo(editor) {
+    if (this._textUndoStack.length > 1) {
+      const current = this._textUndoStack.pop();
+      this._textRedoStack.push(current);
+      editor.innerText = this._textUndoStack[this._textUndoStack.length - 1];
+    }
+  },
+
+  _textEditorRedo(editor) {
+    if (this._textRedoStack.length > 0) {
+      const next = this._textRedoStack.pop();
+      this._textUndoStack.push(next);
+      editor.innerText = next;
+    }
+  },
+
   closeEditor() {
-    document.getElementById('editorOverlay').classList.add('hidden');
+    document.getElementById('bottomPanel').classList.add('hidden');
+    document.getElementById('panelResizeHandle').classList.add('hidden');
     // Reset text view so it doesn't linger when opening an image next
     const textView = document.getElementById('textClipView');
     textView.classList.add('hidden');
     textView.style.display = 'none';
     textView.innerHTML = '';
     this.editorOpen = false;
+    // Reset panel heights
+    document.getElementById('topPanel').style.flex = '';
+    document.getElementById('bottomPanel').style.flex = '';
   },
 
   // ===== Tabs =====
@@ -1185,8 +1320,12 @@ const App = {
   },
 
   async saveTextClipContent(clipId, content) {
-    await ucb.updateClip(clipId, { content });
-    const clip = this.clips.find(c => c.id === clipId);
+    // Save version before updating
+    const clip = this.clips.find(c => c.id === clipId) || this.allClips.find(c => c.id === clipId);
+    if (clip && clip.content && clip.content !== content) {
+      await ucb.saveClipVersion(clipId, clip.content, clip.filePath || null);
+    }
+    await ucb.updateClip(clipId, { content, editedAt: Date.now() });
     if (clip) clip.content = content;
   },
 
@@ -1317,6 +1456,12 @@ const App = {
         <div class="setting-row"><label>Clear all data</label><button class="btn btn-danger" id="clearAllDataBtn" style="font-size:11px">Delete All Clips</button></div>
       </div>
       <div class="settings-section">
+        <h3>Edit History</h3>
+        <div class="setting-row"><label>Auto-cleanup older than</label><div style="display:flex;gap:8px;align-items:center"><select class="form-select" id="settHistoryDays" style="width:120px"><option value="7" ${(settings.historyCleanupDays||'30')==='7'?'selected':''}>7 days</option><option value="14" ${(settings.historyCleanupDays||'30')==='14'?'selected':''}>14 days</option><option value="30" ${(settings.historyCleanupDays||'30')==='30'?'selected':''}>30 days</option><option value="90" ${(settings.historyCleanupDays||'30')==='90'?'selected':''}>90 days</option><option value="0" ${(settings.historyCleanupDays||'30')==='0'?'selected':''}>Never</option></select></div></div>
+        <div class="setting-row"><label>Clean up old versions now</label><button class="btn btn-secondary" id="cleanupHistoryBtn" style="font-size:11px">Cleanup Now</button></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Edit versions are saved automatically when you modify a clip. Old versions are cleaned up on the schedule above.</p>
+      </div>
+      <div class="settings-section">
         <h3>Hidden Folder</h3>
         <div class="setting-row"><label>Passcode</label><button class="btn btn-secondary" onclick="Dialogs.showSetPasscodeDialog()">Set / Change</button></div>
       </div>
@@ -1339,6 +1484,11 @@ const App = {
       const d = await ucb.chooseDirectory();
       if (d) document.getElementById('settDataDir').value = d;
     });
+    document.getElementById('cleanupHistoryBtn').addEventListener('click', async () => {
+      const days = parseInt(document.getElementById('settHistoryDays').value) || 30;
+      await ucb.cleanupOldHistory(days);
+      this.toast(`Edit history older than ${days} days cleaned up`, 'success');
+    });
     document.getElementById('clearAllDataBtn').addEventListener('click', async () => {
       const ok = await Dialogs.confirm('Delete ALL clips?', 'Files will be moved to the Recycle Bin.');
       if (!ok) return;
@@ -1354,8 +1504,12 @@ const App = {
         minimizeToTray: document.getElementById('settMinToTray').checked?'true':'false',
         clipboardNotification: document.getElementById('settClipNotification').checked?'true':'false',
         autoOcr: document.getElementById('settAutoOcr').checked?'true':'false',
-        dataDirectory: document.getElementById('settDataDir').value
+        dataDirectory: document.getElementById('settDataDir').value,
+        historyCleanupDays: document.getElementById('settHistoryDays').value
       });
+      // Auto-cleanup history based on setting
+      const cleanupDays = parseInt(document.getElementById('settHistoryDays').value);
+      if (cleanupDays > 0) await ucb.cleanupOldHistory(cleanupDays);
       await ucb.saveAISettings({
         provider: document.getElementById('settAIProvider').value,
         apiKey: document.getElementById('settAIKey').value,
@@ -1417,6 +1571,26 @@ const App = {
 
     const items = [
       { label: folder.pinned ? 'Unpin' : 'Pin', action: async () => { await ucb.pinFolder(folder.id, !folder.pinned); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); }},
+      { label: 'Rename', action: async () => {
+        const newName = prompt('Rename folder:', folder.name);
+        if (newName && newName !== folder.name) {
+          await ucb.updateFolder(folder.id, { name: newName });
+          await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess();
+          this.toast('Folder renamed', 'success');
+        }
+      }},
+      { label: 'Change Color', action: async () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = folder.color || '#4cd964';
+        input.style.cssText = 'position:fixed;top:-9999px';
+        document.body.appendChild(input);
+        input.addEventListener('input', async () => {
+          await ucb.updateFolder(folder.id, { color: input.value });
+          await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess();
+        });
+        input.addEventListener('change', () => input.remove());
+        input.click();
+      }},
       { label: 'Open in File Explorer', action: () => { ucb.openInExplorer(folder.path || this.explorerHomePath); }},
       { label: 'Browse in Sidebar', action: () => { if (folder.path) this.navigateExplorer(folder.path); }},
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(folder.path || ''); this.toast('Path copied', 'success'); }},
