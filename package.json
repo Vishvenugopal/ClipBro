@@ -1,6 +1,6 @@
 {
   "name": "clipbro",
-  "version": "1.0.0-beta",
+  "version": "1.0.0",
   "description": "ClipBro - Your intelligent clipboard companion with AI features & Screenshot manager for Windows",
   "main": "electron/main.js",
   "scripts": {
