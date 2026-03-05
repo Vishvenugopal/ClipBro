@@ -92,7 +92,7 @@ function createMainWindow() {
     transparent: false,
     backgroundColor: '#0a0a0f',
     show: false,
-    icon: path.join(__dirname, '..', 'assets', 'clipbro-icons', 'Green Guy.png'),
+    icon: path.join(__dirname, '..', 'assets', 'clipbro-icons', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -144,7 +144,7 @@ function createMainWindow() {
 }
 
 function createTray() {
-  const trayIconPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'Green Guy.png');
+  const trayIconPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'icon.png');
   let trayIcon;
   if (fs.existsSync(trayIconPath)) {
     trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 });
