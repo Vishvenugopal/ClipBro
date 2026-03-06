@@ -41,10 +41,10 @@
       "deleteAppDataOnUninstall": false
     },
     "appx": {
-      "identityName": "REPLACE_WITH_YOUR_IDENTITY",
+      "identityName": "VishVenugopal.ClipBroManager",
       "publisher": "CN=1AF38139-DE96-4FEF-B4AD-AA6B6B202BEC",
-      "publisherDisplayName": "REPLACE_WITH_YOUR_NAME",
-      "applicationId": "ClipBro Manager",
+      "publisherDisplayName": "Vish Venugopal",
+      "applicationId": "ClipBroManager",
       "displayName": "ClipBro Manager",
       "languages": ["en-US"],
       "backgroundColor": "#0d0d0d"

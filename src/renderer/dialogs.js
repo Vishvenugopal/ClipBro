@@ -6,30 +6,55 @@ const Dialogs = {
     const content = document.getElementById('modalContent');
     content.innerHTML = html;
     overlay.classList.remove('hidden');
-    overlay.addEventListener('click', (e) => {
+    // Use onclick to avoid stacking duplicate listeners from repeated show() calls
+    overlay.onclick = (e) => {
       if (e.target === overlay) this.close();
-    });
+    };
   },
 
   close() {
     document.getElementById('modalOverlay').classList.add('hidden');
   },
 
-  confirm(title, message) {
+  confirm(title, message, confirmLabel = 'Delete') {
     return new Promise((resolve) => {
       this.show(`
         <div class="modal-header">
           <h2>${title}</h2>
           <button class="modal-close" onclick="Dialogs.close()">&times;</button>
         </div>
-        <p style="color:var(--text-secondary);margin-bottom:16px">${message}</p>
+        <p style="color:var(--text-secondary);margin-bottom:16px;white-space:pre-line">${message}</p>
         <div class="btn-row">
           <button class="btn btn-secondary" id="confirmNo">Cancel</button>
-          <button class="btn btn-danger" id="confirmYes">Delete</button>
+          <button class="btn btn-danger" id="confirmYes">${confirmLabel}</button>
         </div>
       `);
       document.getElementById('confirmNo').addEventListener('click', () => { this.close(); resolve(false); });
       document.getElementById('confirmYes').addEventListener('click', () => { this.close(); resolve(true); });
+    });
+  },
+
+  prompt(title, message, defaultValue = '') {
+    return new Promise((resolve) => {
+      this.show(`
+        <div class="modal-header">
+          <h2>${title}</h2>
+          <button class="modal-close" onclick="Dialogs.close()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label">${message}</label>
+          <input type="text" class="form-input" id="promptInput" value="${defaultValue}" autofocus />
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="promptCancel">Cancel</button>
+          <button class="btn btn-primary" id="promptOk">OK</button>
+        </div>
+      `);
+      const input = document.getElementById('promptInput');
+      input.select();
+      document.getElementById('promptCancel').addEventListener('click', () => { this.close(); resolve(null); });
+      document.getElementById('promptOk').addEventListener('click', () => { const val = input.value.trim(); this.close(); resolve(val || null); });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('promptOk').click(); if (e.key === 'Escape') document.getElementById('promptCancel').click(); });
     });
   },
 
@@ -40,7 +65,6 @@ const Dialogs = {
       '#1a5e32','#8b1a1a','#8a5200','#7a6400','#1a5276','#6c2d82','#8a1a38',
       '#5dbe78','#e74c3c','#e8a317','#d4ac0d','#5dade2','#bb6bd9','#e84573'
     ];
-    const defaultPath = App.explorerHomePath || '';
     this.show(`
       <div class="modal-header">
         <h2>New Folder</h2>
@@ -49,14 +73,7 @@ const Dialogs = {
       <div class="form-group">
         <label class="form-label">Name</label>
         <input type="text" class="form-input" id="newFolderName" placeholder="Folder name" autofocus />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Path</label>
-        <div style="display:flex;gap:6px;align-items:center">
-          <input type="text" class="form-input" id="newFolderPath" value="${defaultPath}" style="flex:1;font-size:11px" />
-          <button class="btn btn-secondary" id="browseFolderPathBtn" style="font-size:10px;padding:5px 8px">Browse</button>
-        </div>
-        <div style="font-size:9px;color:var(--text-muted);margin-top:2px">Filesystem directory for this folder</div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:2px">Creates a subfolder inside All Clips</div>
       </div>
       <div class="form-group">
         <label class="form-label">Color</label>
@@ -71,17 +88,15 @@ const Dialogs = {
       </div>
     `);
 
-    document.getElementById('browseFolderPathBtn').addEventListener('click', async () => {
-      const d = await ucb.chooseDirectory();
-      if (d) document.getElementById('newFolderPath').value = d;
-    });
-
     document.getElementById('createFolderBtn').addEventListener('click', async () => {
       const name = document.getElementById('newFolderName').value.trim();
       if (!name) return;
       const color = document.getElementById('selectedFolderColor').value;
-      const folderPath = document.getElementById('newFolderPath').value.trim();
-      await ucb.createFolder({ name, color, pinned: true, path: folderPath || null });
+      // Build the path as a subfolder of the All Clips directory
+      const basePath = App.explorerHomePath || '';
+      const safeName = name.replace(/[<>:"/\\|?*]/g, '_');
+      const folderPath = basePath ? (basePath.replace(/[\\/]+$/, '') + '\\' + safeName) : null;
+      await ucb.createFolder({ name, color, pinned: true, path: folderPath });
       App.folders = await ucb.getFolders();
       App.renderPinnedFolders();
       App.renderQuickAccess();
@@ -175,9 +190,20 @@ const Dialogs = {
 
     document.querySelectorAll('[data-folder-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        const folder = folders.find(f => f.id === btn.dataset.folderId);
+        this.close();
+        // Virtual filesystem clip — move file on disk
+        if (clip._isVirtual && clip.filePath && folder && folder.path) {
+          await ucb.moveFilesToDir([clip.filePath], folder.path);
+          App.renderPinnedFolders();
+          await App._refreshActiveFolderTab();
+          App.renderClipGrid();
+          App.refreshExplorer();
+          App.toast(`Moved to ${folder.name}`, 'success');
+          return;
+        }
         const oldFolderId = clip.folderId || null;
         await ucb.moveClipToFolder(clip.id, btn.dataset.folderId);
-        const folder = folders.find(f => f.id === btn.dataset.folderId);
         App.pushUndo({ type: 'move', clipId: clip.id, oldFolderId, newFolderId: btn.dataset.folderId, folderName: folder ? folder.name : 'folder' });
         await App.loadData();
         App.renderPinnedFolders();
@@ -185,7 +211,6 @@ const Dialogs = {
         App.renderLeftSidebar();
         App.renderLibraryTabs();
         App.refreshExplorer();
-        this.close();
         App.toastWithUndo(`Moved to ${folder ? folder.name : 'folder'}`);
       });
     });
@@ -345,98 +370,6 @@ const Dialogs = {
       await ucb.setPasscode(pass, email);
       this.close();
       App.toast('Passcode set successfully', 'success');
-    });
-  },
-
-  // ===== Share Dialog =====
-  showShareDialog(clip) {
-    if (!clip) { App.toast('Select a clip first', 'info'); return; }
-
-    this.show(`
-      <div class="modal-header">
-        <h2>Share Clip</h2>
-        <button class="modal-close" onclick="Dialogs.close()">&times;</button>
-      </div>
-      <div class="share-options">
-        <button class="share-option" id="shareQR">
-          <div class="share-option-icon green">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/><rect x="2" y="14" width="8" height="8" rx="1"/><rect x="14" y="14" width="4" height="4"/><line x1="22" y1="18" x2="22" y2="22"/><line x1="18" y1="22" x2="22" y2="22"/></svg>
-          </div>
-          <div class="share-option-text">
-            <h3>QR Code</h3>
-            <p>Generate a temporary QR code for quick sharing</p>
-          </div>
-        </button>
-        <button class="share-option" id="shareLink">
-          <div class="share-option-icon blue">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-          </div>
-          <div class="share-option-text">
-            <h3>Temporary Link</h3>
-            <p>Create a link that expires after 30 minutes</p>
-          </div>
-        </button>
-        <button class="share-option" id="shareEmail">
-          <div class="share-option-icon orange">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-          </div>
-          <div class="share-option-text">
-            <h3>Email</h3>
-            <p>Send clip via email</p>
-          </div>
-        </button>
-      </div>
-    `);
-
-    document.getElementById('shareQR').addEventListener('click', async () => {
-      await this.showQRCode(clip);
-    });
-
-    document.getElementById('shareLink').addEventListener('click', async () => {
-      const url = await ucb.createShareLink(clip.id, 30);
-      this.show(`
-        <div class="modal-header">
-          <h2>Share Link</h2>
-          <button class="modal-close" onclick="Dialogs.close()">&times;</button>
-        </div>
-        <p style="color:var(--text-secondary);font-size:12px;margin-bottom:12px">Link expires in 30 minutes. Share this with anyone on your local network.</p>
-        <div class="form-group">
-          <input type="text" class="form-input" id="shareLinkUrl" value="${url}" readonly style="font-size:12px" />
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="Dialogs.close()">Close</button>
-          <button class="btn btn-primary" id="copyLinkBtn">Copy Link</button>
-        </div>
-      `);
-      document.getElementById('copyLinkBtn').addEventListener('click', () => {
-        document.getElementById('shareLinkUrl').select();
-        document.execCommand('copy');
-        App.toast('Link copied!', 'success');
-      });
-    });
-
-    document.getElementById('shareEmail').addEventListener('click', () => {
-      this.show(`
-        <div class="modal-header">
-          <h2>Email Clip</h2>
-          <button class="modal-close" onclick="Dialogs.close()">&times;</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Recipient Email</label>
-          <input type="email" class="form-input" id="emailRecipient" placeholder="someone@example.com" autofocus />
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="Dialogs.close()">Cancel</button>
-          <button class="btn btn-primary" id="sendEmailBtn">Send</button>
-        </div>
-      `);
-      document.getElementById('sendEmailBtn').addEventListener('click', async () => {
-        const email = document.getElementById('emailRecipient').value.trim();
-        if (!email) return;
-        await ucb.sendEmail(clip.id, email);
-        this.close();
-        App.toast('Opening email client...', 'info');
-      });
     });
   },
 
@@ -677,7 +610,7 @@ const Dialogs = {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:10px;color:var(--text-secondary)">
             <span>${kbd('PrintScreen')} Screenshot</span>
             <span>${kbd('Ctrl+Shift+S')} Select region</span>
-            <span>${kbd('Ctrl+Shift+V')} Show / hide app</span>
+            <span>${kbd('Ctrl+Alt+V')} Show / hide app</span>
             <span>${kbd('Ctrl+S')} Save edits</span>
             <span>${kbd('Ctrl+Z')} Undo</span>
             <span>${kbd('Ctrl+Shift+Z')} Redo</span>

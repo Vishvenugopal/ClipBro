@@ -62,11 +62,50 @@ const App = {
       document.getElementById('editorCanvas').style.display = 'none';
       document.getElementById('panelResizeHandle').classList.add('hidden');
       console.log('[App] UI rendered, initializing file explorer...');
-      await this.initFileExplorer();
-      // Apply saved zoom (default 100%) using Electron webFrame
+      // Apply saved settings BEFORE explorer init so scaling is applied on first render
       const savedSettings = await ucb.getSettings() || {};
       const savedScale = parseInt(savedSettings.uiScale) || 100;
       this._setZoom(savedScale, true);
+      // Restore panel scaling preferences
+      if (savedSettings.libGridMode !== undefined) {
+        this._libGridMode = parseInt(savedSettings.libGridMode);
+        this._applyLibGridMode();
+        const libSlider = document.getElementById('libraryThumbScale');
+        if (libSlider) libSlider.value = this._libGridMode;
+      }
+      if (savedSettings.explorerThumbMode !== undefined) {
+        this._explorerThumbMode = parseInt(savedSettings.explorerThumbMode);
+        const expSlider = document.getElementById('explorerThumbScale');
+        if (expSlider) expSlider.value = this._explorerThumbMode;
+      }
+      if (savedSettings.explorerSortMode) {
+        this._explorerSortMode = savedSettings.explorerSortMode;
+        const sortSelect = document.getElementById('explorerSortSelect');
+        if (sortSelect) sortSelect.value = this._explorerSortMode;
+      }
+      if (savedSettings.showFileExtensions !== undefined) {
+        this._showFileExtensions = savedSettings.showFileExtensions !== 'false';
+      }
+      if (savedSettings.fitThumbnails === 'true') {
+        this._fitThumbnails = true;
+        document.body.classList.add('fit-thumbnails');
+      }
+      await this.initFileExplorer();
+      // Restore open tabs from previous session (fetch full clip data)
+      if (savedSettings.openTabIds) {
+        try {
+          const tabIds = JSON.parse(savedSettings.openTabIds);
+          const savedActiveId = savedSettings.activeTabId || null;
+          for (const id of tabIds) {
+            const clip = await ucb.getClip(id);
+            if (clip && !this.openTabs.find(t => t.id === id)) this.openTabs.push(clip);
+          }
+          if (this.openTabs.length > 0) {
+            const activeClip = this.openTabs.find(t => t.id === savedActiveId) || this.openTabs[this.openTabs.length - 1];
+            this.openEditor(activeClip);
+          }
+        } catch {}
+      }
       // Show hidden folder button if experimental feature is enabled
       if (savedSettings.experimentalHiddenFolder === 'true') {
         const hiddenBtn = document.getElementById('hiddenFolderBtn');
@@ -89,8 +128,9 @@ const App = {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         this.allClips = await ucb.getClips() || [];
-        this.clips = [...this.allClips];
         this.folders = await ucb.getFolders() || [];
+        // Re-apply the active library tab filter so folder views stay correct
+        this._reapplyCurrentFilter();
         console.log('[App] Data loaded on attempt', attempt + 1);
         return;
       } catch (e) {
@@ -99,6 +139,45 @@ const App = {
       }
     }
     console.error('[App] All loadData attempts failed');
+  },
+
+  _reapplyCurrentFilter() {
+    // If a non-"all" library tab is active, re-derive clips from that tab's filter
+    if (this.activeLibTab && this.activeLibTab !== 'all') {
+      const tab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+      if (tab) {
+        const label = tab.label;
+        const typeMap = { 'Images': 'image', 'Text': 'text', 'Links': 'link', 'Code': 'code' };
+        if (label === 'Favorites') {
+          this.clips = this.allClips.filter(c => c.favorite);
+        } else if (typeMap[label]) {
+          this.clips = this.allClips.filter(c => c.type === typeMap[label]);
+        } else if (label === 'Other') {
+          this.clips = this.allClips.filter(c => !['image','text','link','code'].includes(c.type));
+        } else if (tab.folderPath) {
+          // Folder-backed tab: use cached filesystem clips
+          if (this._folderClipsCache && this._folderClipsCache.path === tab.folderPath) {
+            this.clips = [...this._folderClipsCache.clips];
+          } else {
+            this.clips = [];
+            this._loadFolderTabClips(tab.folderPath).catch(() => {});
+          }
+        } else {
+          this.clips = [...this.allClips];
+        }
+        return;
+      }
+    }
+    // Also handle loadFolderView's currentView === 'folder'
+    if (this.currentView === 'folder' && this.currentViewLabel) {
+      const folder = this.folders.find(f => f.name === this.currentViewLabel);
+      if (folder) {
+        this.clips = this.allClips.filter(c => c.folderId === folder.id);
+        return;
+      }
+    }
+    // Default: show all clips
+    this.clips = [...this.allClips];
   },
 
   // ===== Event Binding =====
@@ -122,7 +201,7 @@ const App = {
     document.getElementById('importFileBtn').addEventListener('click', () => this.importFiles());
     document.getElementById('screenshotBtn').addEventListener('click', () => this.takeScreenshot());
 
-    // Pinned folder bar: accept folder drops from file explorer
+    // Pinned Folders bar drag-to-pin
     const pinBar = document.getElementById('pinnedFoldersBar');
     pinBar.addEventListener('dragover', (e) => {
       if (this._dragFolderPath) { e.preventDefault(); pinBar.classList.add('drag-over'); }
@@ -135,15 +214,22 @@ const App = {
       const folderPath = this._dragFolderPath || e.dataTransfer.getData('text/x-folder-path');
       if (folderPath) {
         const folderName = this._dragFolderName || folderPath.replace(/\\/g, '/').split('/').pop();
-        const alreadyPinned = this.folders.some(f => f.path && f.path.replace(/\\/g, '/') === folderPath.replace(/\\/g, '/'));
-        if (!alreadyPinned) {
-          await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: folderPath });
+        const existingPinned = this.folders.find(f => f.pinned && f.path && f.path.replace(/\\/g, '/') === folderPath.replace(/\\/g, '/'));
+        if (existingPinned) {
+          this.toast('Already pinned', 'info');
+        } else {
+          // Re-pin existing unpinned folder record if it exists, otherwise create new
+          const existingUnpinned = this.folders.find(f => !f.pinned && f.path && f.path.replace(/\\/g, '/') === folderPath.replace(/\\/g, '/'));
+          if (existingUnpinned) {
+            await ucb.pinFolder(existingUnpinned.id, true);
+          } else {
+            await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: folderPath });
+          }
           this.folders = await ucb.getFolders();
           this.renderPinnedFolders();
           this.renderQuickAccess();
+          this.refreshExplorer();
           this.toast(`Pinned "${folderName}"`, 'success');
-        } else {
-          this.toast('Already pinned', 'info');
         }
       }
     });
@@ -180,6 +266,7 @@ const App = {
     document.getElementById('libraryThumbScale').addEventListener('input', (e) => {
       this._libGridMode = parseInt(e.target.value);
       this._applyLibGridMode();
+      ucb.saveSettings({ libGridMode: String(this._libGridMode) }).catch(() => {});
     });
 
     // Explorer search
@@ -212,7 +299,7 @@ const App = {
     // Bulk actions
     document.getElementById('bulkDeleteBtn').addEventListener('click', () => this.bulkDeleteSelected());
     document.getElementById('bulkFavBtn').addEventListener('click', () => this.bulkToggleFavorite());
-    document.getElementById('bulkMoveBtn').addEventListener('click', () => this.bulkMoveToFolder());
+    document.getElementById('bulkMoveBtn').addEventListener('click', (e) => { e.stopPropagation(); this.bulkMoveToFolder(); });
     document.getElementById('bulkCancelBtn').addEventListener('click', () => this.toggleSelectMode());
 
     // File explorer nav
@@ -222,12 +309,15 @@ const App = {
     document.getElementById('explorerOpenExternalBtn').addEventListener('click', () => {
       if (this.explorerPath) ucb.openInExplorer(this.explorerPath);
     });
+    document.getElementById('explorerNewFolderBtn').addEventListener('click', () => this.createNewExplorerFolder());
     document.getElementById('explorerThumbScale').addEventListener('input', (e) => {
       this._explorerThumbMode = parseInt(e.target.value);
+      ucb.saveSettings({ explorerThumbMode: String(this._explorerThumbMode) }).catch(() => {});
       if (this.explorerPath) ucb.listDirectory(this.explorerPath).then(entries => this.renderExplorerFiles(entries));
     });
     document.getElementById('explorerSortSelect').addEventListener('change', (e) => {
       this._explorerSortMode = e.target.value;
+      ucb.saveSettings({ explorerSortMode: this._explorerSortMode }).catch(() => {});
       if (this._lastExplorerEntries) this.renderExplorerFiles(this._lastExplorerEntries);
     });
     document.getElementById('explorerFilterBtn').addEventListener('click', () => {
@@ -237,30 +327,164 @@ const App = {
     // Keyboard
     document.addEventListener('keydown', (e) => this.handleKeyboard(e));
 
-    // Drop zone (external files only)
+    // Drop zone — overlay is scoped to clip-area-wrapper, not full screen
     document.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
+    this._externalDragCounter = 0;
+    const clipAreaWrapper = document.querySelector('.clip-area-wrapper');
     document.addEventListener('dragenter', (e) => {
       e.preventDefault();
       if (!this._internalDrag && e.dataTransfer.types.includes('Files')) {
-        document.getElementById('dropZone').classList.remove('hidden');
+        this._externalDragCounter++;
+        // Highlight pinned folder cards and folder-based library tabs as potential drop targets
+        document.querySelectorAll('.pinned-folder-card').forEach(c => c.classList.add('external-drop-ready'));
+        document.querySelectorAll('.library-tab[data-lib-tab]').forEach(t => {
+          const tab = this.libraryTabs.find(lt => lt.id === t.dataset.libTab);
+          if (tab && tab.folderPath) t.classList.add('external-drop-ready');
+        });
       }
     });
-    document.getElementById('dropZone').addEventListener('dragleave', (e) => {
-      if (e.target === document.getElementById('dropZone') || e.target === document.querySelector('.drop-zone-inner')) {
+    document.addEventListener('dragleave', (e) => {
+      if (!this._internalDrag && this._externalDragCounter > 0) {
+        this._externalDragCounter--;
+        if (this._externalDragCounter === 0) {
+          document.querySelectorAll('.pinned-folder-card').forEach(c => c.classList.remove('external-drop-ready'));
+          document.querySelectorAll('.library-tab').forEach(t => t.classList.remove('external-drop-ready'));
+          document.getElementById('dropZone').classList.add('hidden');
+          clipAreaWrapper.classList.remove('drag-highlight');
+        }
+      }
+    });
+    document.addEventListener('drop', (e) => {
+      e.preventDefault(); // Prevent browser from opening dropped files
+      this._externalDragCounter = 0;
+      document.querySelectorAll('.pinned-folder-card').forEach(c => c.classList.remove('external-drop-ready'));
+      document.querySelectorAll('.library-tab').forEach(t => t.classList.remove('external-drop-ready'));
+      clipAreaWrapper.classList.remove('drag-highlight');
+    });
+    // Show overlay ONLY when hovering the clip-area-wrapper with external files or explorer drags
+    this._clipAreaDragCounter = 0;
+    clipAreaWrapper.addEventListener('dragenter', (e) => {
+      const isExternal = !this._internalDrag && e.dataTransfer.types.includes('Files');
+      const isExplorerDrag = this._internalDrag && this._explorerDragPaths && this._explorerDragPaths.length > 0;
+      const isClipDrag = this._internalDrag && !this._explorerDragPaths;
+      if (isExternal || isExplorerDrag || isClipDrag) {
+        this._clipAreaDragCounter++;
+        // Update drop text based on active library tab
+        const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+        const dropText = document.getElementById('dropZoneText');
+        if (activeTab && activeTab.folderPath) {
+          dropText.textContent = `Drop to import to ${activeTab.label}`;
+          clipAreaWrapper.classList.add('drag-highlight');
+          document.getElementById('dropZone').classList.remove('hidden');
+        } else if (isExternal || isExplorerDrag) {
+          dropText.textContent = 'Drop files here to import';
+          clipAreaWrapper.classList.remove('drag-highlight');
+          document.getElementById('dropZone').classList.remove('hidden');
+        }
+      }
+    });
+    clipAreaWrapper.addEventListener('dragleave', (e) => {
+      if (!clipAreaWrapper.contains(e.relatedTarget)) {
+        this._clipAreaDragCounter = 0;
         document.getElementById('dropZone').classList.add('hidden');
+        clipAreaWrapper.classList.remove('drag-highlight');
       }
     });
-    document.getElementById('dropZone').addEventListener('drop', (e) => {
+    document.getElementById('dropZone').addEventListener('drop', async (e) => {
       e.preventDefault();
+      e.stopPropagation();
+      this._clipAreaDragCounter = 0;
       document.getElementById('dropZone').classList.add('hidden');
-      if (e.dataTransfer.files.length > 0) {
-        this.toast('Importing files...', 'info');
-        ucb.pasteFromClipboard();
+      clipAreaWrapper.classList.remove('drag-highlight');
+      // 1. Internal explorer file drop
+      if (this._internalDrag && this._explorerDragPaths && this._explorerDragPaths.length > 0) {
+        const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+        if (activeTab && activeTab.folderPath) {
+          // Folder tab active — copy to filesystem only (no DB import)
+          try {
+            const results = await ucb.copyFilesToDir(this._explorerDragPaths, activeTab.folderPath);
+            const copied = results.filter(r => r.success).length;
+            if (copied > 0) {
+              this.pushUndo({ type: 'explorerCopy', entries: results });
+              this.renderPinnedFolders();
+              await this._refreshActiveFolderTab();
+              this.refreshExplorer();
+              this.toast(`Copied ${copied} file${copied > 1 ? 's' : ''} to ${activeTab.label} — Ctrl+Z to undo`, 'success');
+            }
+          } catch {}
+        } else {
+          // No folder tab active — import to All Clips
+          const imported = await ucb.importFilesFromPaths(this._explorerDragPaths);
+          if (imported && imported.length > 0) {
+            await this.loadData();
+            this.renderClipGrid();
+            this.renderLeftSidebar();
+            this.renderPinnedFolders();
+            this.renderLibraryTabs();
+            this.refreshExplorer();
+            this.toast(`Imported ${imported.length} file${imported.length > 1 ? 's' : ''} to All Clips`, 'success');
+          }
+        }
+        return;
+      }
+      // 2. External file drop from OS
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const filePaths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean);
+        if (filePaths.length > 0) {
+          const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+          if (activeTab && activeTab.folderPath) {
+            // Folder tab active — copy to filesystem only (no DB import)
+            await ucb.copyFilesToDir(filePaths, activeTab.folderPath);
+            this.renderPinnedFolders();
+            await this._refreshActiveFolderTab();
+            this.refreshExplorer();
+            this.toast(`Copied ${filePaths.length} file${filePaths.length > 1 ? 's' : ''} to ${activeTab.label}`, 'success');
+          } else {
+            // No folder tab — import to All Clips
+            this.toast('Importing files...', 'info');
+            const imported = await ucb.importFilesFromPaths(filePaths);
+            if (imported && imported.length > 0) {
+              await this.loadData();
+              this.renderClipGrid();
+              this.renderLeftSidebar();
+              this.renderPinnedFolders();
+              this.renderLibraryTabs();
+              this.refreshExplorer();
+              this.toast(`Imported ${imported.length} file${imported.length > 1 ? 's' : ''}`, 'success');
+            }
+          }
+        }
+        return;
+      }
+      // 3. Internal clip drag (from recent clips or library grid) to active folder tab
+      const clipId = e.dataTransfer.getData('text/plain');
+      if (clipId && this._internalDrag) {
+        const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+        if (activeTab && activeTab.folderPath) {
+          if (clipId.startsWith('fs_')) {
+            const filePath = clipId.substring(3);
+            const results = await ucb.copyFilesToDir([filePath], activeTab.folderPath);
+            const copied = results.filter(r => r.success).length;
+            if (copied > 0) {
+              this.pushUndo({ type: 'explorerCopy', entries: results });
+              this.renderPinnedFolders();
+              await this._refreshActiveFolderTab();
+              this.refreshExplorer();
+              this.toast(`Copied to ${activeTab.label} — Ctrl+Z to undo`, 'success');
+            }
+          } else {
+            await ucb.copyClipToPath(clipId, activeTab.folderPath);
+            this.renderPinnedFolders();
+            await this._refreshActiveFolderTab();
+            this.refreshExplorer();
+            this.toast(`Copied to ${activeTab.label}`, 'success');
+          }
+        }
       }
     });
 
-    // Context menu dismiss
-    document.addEventListener('click', (e) => {
+    // Context menu dismiss (mousedown for more aggressive dismissal on both left & right clicks)
+    document.addEventListener('mousedown', (e) => {
       if (!e.target.closest('.context-menu')) this.dismissContextMenu();
     });
 
@@ -285,9 +509,15 @@ const App = {
     let isDragging = false, startX, startY, scrollInterval;
 
     clipArea.addEventListener('mousedown', (e) => {
-      if (!this.selectMode) return;
       if (e.target.closest('.clip-card')) return;
       if (e.button !== 0) return;
+      // Auto-enter select mode on drag-select
+      if (!this.selectMode) {
+        this.selectMode = true;
+        const sortBtn = document.getElementById('selectModeBtnSort');
+        if (sortBtn) sortBtn.classList.add('active');
+        this.renderClipGrid();
+      }
       isDragging = true;
       const rect = clipArea.getBoundingClientRect();
       startX = e.clientX - rect.left + clipArea.scrollLeft;
@@ -330,7 +560,16 @@ const App = {
         };
         const overlaps = !(cardR.right < selR.left || cardR.left > selR.right || cardR.bottom < selR.top || cardR.top > selR.bottom);
         const clipId = card.dataset.clipId;
-        if (overlaps) { this.selectedClips.add(clipId); card.classList.add('selected'); }
+        if (overlaps) {
+          this.selectedClips.add(clipId);
+          card.classList.add('selected');
+          const cb = card.querySelector('.clip-card-select');
+          if (cb && !cb.classList.contains('checked')) {
+            cb.classList.add('checked');
+            const svg = cb.querySelector('polyline');
+            if (svg) svg.setAttribute('stroke', '#000');
+          }
+        }
       });
       this.updateBulkUI();
     });
@@ -428,20 +667,84 @@ const App = {
       if (section === 'settings') this.showSettings();
     });
 
-    // Memory optimization: reduce work when window is hidden
-    ucb.onWindowVisibility((visible) => {
+    // Open a specific clip in the editor (e.g. from notification click)
+    ucb.onOpenClip(async (clipId) => {
+      let clip = this.allClips.find(c => c.id === clipId);
+      if (!clip) clip = await ucb.getClip(clipId);
+      if (clip) this.openEditor(clip);
+    });
+
+    // Memory optimization: aggressively release resources when window is hidden
+    ucb.onWindowVisibility(async (visible) => {
       this._windowVisible = visible;
       if (!visible) {
-        // Clear thumbnail image caches to free memory
-        document.querySelectorAll('.clip-card-thumb img, .recent-clip-thumb img').forEach(img => {
-          img.dataset.src = img.src;
-          img.src = '';
+        // 1. Clear all image sources to release decoded bitmap memory
+        document.querySelectorAll('img[src]').forEach(img => {
+          if (img.src && img.src !== '' && !img.src.startsWith('data:image/svg')) {
+            img.dataset.src = img.src;
+            img.src = '';
+          }
         });
+        // 2. Hollow out heavy DOM containers to free layout/paint memory
+        const clipGrid = document.getElementById('clipGrid');
+        if (clipGrid) { clipGrid.innerHTML = ''; }
+        const recentImgs = document.getElementById('recentImagesList');
+        if (recentImgs) { recentImgs.innerHTML = ''; }
+        const recentTxts = document.getElementById('recentTextsList');
+        if (recentTxts) { recentTxts.innerHTML = ''; }
+        const explorerList = document.getElementById('explorerFileList');
+        if (explorerList) { explorerList.innerHTML = ''; }
+        const libraryContent = document.getElementById('libraryContent');
+        if (libraryContent) { libraryContent.innerHTML = ''; }
+        // 3. Null out ALL large cached data arrays — will reload from DB on restore
+        this.clips = [];
+        this.allClips = [];
+        this.folders = [];
+        // 4. Revoke any object URLs to free blob memory
+        if (this._objectURLs) {
+          this._objectURLs.forEach(url => URL.revokeObjectURL(url));
+          this._objectURLs = [];
+        }
+        // 5. Clear editor history to free large base64 strings
+        Editor.drawHistory = [];
+        Editor.historyIndex = -1;
+        Editor._historyImageCache = null;
+        Editor.originalImage = null;
+        // 6. Clear undo/redo stacks (hold full clip data)
+        this.undoStack = [];
+        this.redoStack = [];
+        // 7. Clear pinned folder thumbnails cache
+        this._pinnedFolderThumbs = {};
+        this._pinnedFolderCounts = {};
+        // 8. Clear explorer entries cache
+        this._lastExplorerEntries = null;
+        // 9. Persist open tabs to settings before clearing (survive quit-from-tray)
+        this._saveTabState();
+        this._savedTabIds = this.openTabs.map(t => t.id);
+        this._savedActiveTabId = this.activeTabId || null;
+        this.openTabs = [];
       } else {
-        // Restore thumbnails when window becomes visible again
-        document.querySelectorAll('.clip-card-thumb img[data-src], .recent-clip-thumb img[data-src]').forEach(img => {
-          if (img.dataset.src) { img.src = img.dataset.src; delete img.dataset.src; }
-        });
+        // Restore: reload everything from DB (fresh data, no stale state)
+        await this.loadData();
+        // Restore open tabs from saved IDs
+        if (this._savedTabIds && this._savedTabIds.length) {
+          for (const id of this._savedTabIds) {
+            const clip = await ucb.getClip(id);
+            if (clip && !this.openTabs.find(t => t.id === id)) this.openTabs.push(clip);
+          }
+          if (this.openTabs.length > 0) {
+            const activeClip = this.openTabs.find(t => t.id === this._savedActiveTabId) || this.openTabs[this.openTabs.length - 1];
+            this.openEditor(activeClip);
+          }
+          this._savedTabIds = null;
+          this._savedActiveTabId = null;
+        }
+        // Full re-render to restore UI
+        this.renderClipGrid();
+        this.renderLeftSidebar();
+        this.renderPinnedFolders();
+        this.renderLibraryTabs();
+        this.refreshExplorer();
       }
     });
 
@@ -480,11 +783,18 @@ const App = {
     const confirmed = await Dialogs.confirm(`Delete ${count} clip(s)?`, 'Files will be moved to the Recycle Bin.');
     if (!confirmed) return;
     const deletedClips = [];
+    const virtualPaths = [];
     for (const id of this.selectedClips) {
-      const clipData = await ucb.softDeleteClip(id);
-      if (clipData) deletedClips.push(clipData);
+      const clip = this.clips.find(c => c.id === id);
+      if (clip && clip._isVirtual && clip.filePath) {
+        virtualPaths.push(clip.filePath);
+      } else {
+        const clipData = await ucb.softDeleteClip(id);
+        if (clipData) deletedClips.push(clipData);
+      }
       this.closeTab(id);
     }
+    if (virtualPaths.length > 0) await ucb.deleteFiles(virtualPaths);
     this.clips = this.clips.filter(c => !this.selectedClips.has(c.id));
     this.allClips = this.allClips.filter(c => !this.selectedClips.has(c.id));
     this.selectedClips.clear();
@@ -504,14 +814,16 @@ const App = {
   async bulkMoveToFolder() {
     if (this.selectedClips.size === 0) return;
     // Show a quick folder picker using context-menu style dropdown
-    const folders = this.folders.filter(f => f.path || f.id);
-    if (folders.length === 0) { this.toast('No folders available', 'info'); return; }
+    const folders = this.folders.filter(f => f.pinned);
+    if (folders.length === 0) { this.toast('No pinned folders available', 'info'); return; }
     const menu = document.createElement('div');
     menu.className = 'context-menu';
+    // Position the menu above the bulk bar, clamped to viewport
     const bar = document.getElementById('bulkBar');
     const rect = bar.getBoundingClientRect();
     menu.style.left = rect.left + 'px';
-    menu.style.top = (rect.top - folders.length * 30 - 10) + 'px';
+    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    menu.style.top = 'auto';
     const header = document.createElement('div');
     header.style.cssText = 'padding:4px 10px;font-size:10px;color:var(--text-muted);font-weight:600';
     header.textContent = 'Move to folder:';
@@ -523,21 +835,42 @@ const App = {
       btn.addEventListener('click', async () => {
         this.dismissContextMenu();
         const ids = [...this.selectedClips];
-        const undoEntries = [];
+        const virtualPaths = [];
+        const dbIds = [];
         for (const clipId of ids) {
+          const clip = this.clips.find(c => c.id === clipId);
+          if (clip && clip._isVirtual && clip.filePath) {
+            virtualPaths.push(clip.filePath);
+          } else {
+            dbIds.push(clipId);
+          }
+        }
+        // Move virtual filesystem files
+        if (virtualPaths.length > 0 && folder.path) {
+          await ucb.moveFilesToDir(virtualPaths, folder.path);
+        } else if (virtualPaths.length > 0 && !folder.path) {
+          // Can't move FS files to a DB-only folder
+          this.toast('Cannot move filesystem files to a virtual folder', 'info');
+        }
+        // Move DB clips
+        const undoEntries = [];
+        for (const clipId of dbIds) {
           const clip = this.allClips.find(c => c.id === clipId);
           undoEntries.push({ clipId, oldFolderId: clip ? clip.folderId : null });
           await ucb.moveClipToFolder(clipId, folder.id);
         }
-        this.pushUndo({ type: 'bulkMove', entries: undoEntries, newFolderId: folder.id, folderName: folder.name });
+        if (undoEntries.length > 0) {
+          this.pushUndo({ type: 'bulkMove', entries: undoEntries, newFolderId: folder.id, folderName: folder.name });
+        }
         await this.loadData();
         this.renderPinnedFolders();
         this.selectedClips.clear();
+        await this._refreshActiveFolderTab();
         this.renderClipGrid();
         this.renderLibraryTabs();
         this.refreshExplorer();
         this.updateBulkUI();
-        this.toastWithUndo(`Moved ${ids.length} clip(s) to ${folder.name}`);
+        this.toast(`Moved ${ids.length} clip(s) to ${folder.name}`, 'success');
       });
       menu.appendChild(btn);
     });
@@ -574,14 +907,27 @@ const App = {
 
   async _loadPinnedFolderThumbs(folders) {
     if (!this._pinnedFolderThumbs) this._pinnedFolderThumbs = {};
+    if (!this._pinnedFolderCounts) this._pinnedFolderCounts = {};
     const imgExts = ['.png','.jpg','.jpeg','.gif','.bmp','.webp','.svg','.ico'];
     let changed = false;
     for (const f of folders) {
       if (!f.path) continue;
       try {
         const entries = await ucb.listDirectory(f.path);
+        // Update filesystem item count for this folder
+        const fileCount = entries.filter(e => !e.isDirectory).length;
+        const totalCount = entries.length;
+        if (this._pinnedFolderCounts[f.id] !== totalCount) {
+          this._pinnedFolderCounts[f.id] = totalCount;
+          // Update the count label in the DOM directly
+          const card = document.querySelector(`.pinned-folder-card[data-folder-id="${f.id}"]`);
+          if (card) {
+            const countEl = card.querySelector('.pinned-folder-card-count');
+            if (countEl) countEl.textContent = `${totalCount} item${totalCount !== 1 ? 's' : ''}`;
+          }
+        }
         const images = entries.filter(e => !e.isDirectory && imgExts.includes(e.extension))
-          .sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 3).map(e => e.path);
+              .sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 3).map(e => e.path);
         const old = this._pinnedFolderThumbs[f.id];
         if (!old || JSON.stringify(old) !== JSON.stringify(images)) {
           this._pinnedFolderThumbs[f.id] = images;
@@ -636,10 +982,12 @@ const App = {
 
     // Get ALL folder clips (not just 3)
     const folderClips = this.allClips.filter(c => c.folderId === folder.id);
-    const count = folderClips.length;
+    // For filesystem-backed folders, use cached filesystem count if available
+    const count = (folder.path && this._pinnedFolderCounts && this._pinnedFolderCounts[folder.id] !== undefined)
+      ? this._pinnedFolderCounts[folder.id]
+      : folderClips.length;
 
     // Papers behind the folder (recent clip thumbnails peeking out)
-    // For filesystem-backed folders, use cached directory images; for DB folders, use clip images
     let papersHtml = '';
     const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
     if (paperClips.length > 0) {
@@ -688,31 +1036,127 @@ const App = {
 
     card.addEventListener('click', () => {
       if (folder.path) {
-        this.navigateExplorer(folder.path);
         this.openFolderInLibrary(folder.path, folder.name);
       } else {
         this.loadFolderView(folder);
       }
     });
     card.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showFolderContextMenu(e, folder); });
-
     // Drop target for clips
     card.addEventListener('dragover', (e) => { e.preventDefault(); card.classList.add('drag-over'); });
     card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
     card.addEventListener('drop', async (e) => {
       e.preventDefault(); card.classList.remove('drag-over');
+      // 1. Explorer file drag to pinned folder
+      const explorerPaths = e.dataTransfer.getData('text/x-explorer-paths');
+      if (explorerPaths && this._internalDrag && folder.path) {
+        try {
+          const paths = JSON.parse(explorerPaths);
+          const results = await ucb.moveFilesToDir(paths, folder.path);
+          const moved = results.filter(r => r.success).length;
+          if (moved > 0) {
+            this.pushUndo({ type: 'explorerMove', entries: results });
+            this.toast(`Moved ${moved} item${moved > 1 ? 's' : ''} to ${folder.name} — Ctrl+Z to undo`, 'success');
+            this.renderPinnedFolders();
+            this.refreshExplorer();
+            await this._refreshActiveFolderTab();
+          }
+        } catch (err) { this.toast('Move failed', 'error'); }
+        return;
+      }
+      if (explorerPaths && this._internalDrag && !folder.path) {
+        try {
+          const paths = JSON.parse(explorerPaths);
+          const imported = await ucb.importFilesFromPaths(paths);
+          if (imported && imported.length > 0) {
+            for (const clip of imported) { await ucb.moveClipToFolder(clip.id, folder.id); }
+            await this.loadData();
+            this.renderPinnedFolders();
+            this.renderClipGrid();
+            this.renderLeftSidebar();
+            this.renderLibraryTabs();
+            this.refreshExplorer();
+            this.toast(`Imported ${imported.length} file${imported.length > 1 ? 's' : ''} to ${folder.name}`, 'success');
+          }
+        } catch (err) { this.toast('Import failed', 'error'); }
+        return;
+      }
+      // 2. Clip card drag to pinned folder
       const clipId = e.dataTransfer.getData('text/plain');
       if (clipId && this._internalDrag) {
-        const clip = this.allClips.find(c => c.id === clipId);
-        const oldFolderId = clip ? clip.folderId : null;
-        await ucb.moveClipToFolder(clipId, folder.id);
-        this.pushUndo({ type: 'move', clipId, oldFolderId, newFolderId: folder.id, folderName: folder.name });
-        await this.loadData();
-        this.renderPinnedFolders();
-        this.renderClipGrid();
-        this.renderLibraryTabs();
-        this.refreshExplorer();
-        this.toastWithUndo(`Moved to ${folder.name}`);
+        // Virtual filesystem clip (from folder tab) — ID starts with 'fs_'
+        if (clipId.startsWith('fs_')) {
+          const filePath = clipId.substring(3);
+          if (folder.path) {
+            const results = await ucb.copyFilesToDir([filePath], folder.path);
+            const copied = results.filter(r => r.success).length;
+            if (copied > 0) {
+              this.pushUndo({ type: 'explorerCopy', entries: results });
+              this.toast(`Copied to ${folder.name} — Ctrl+Z to undo`, 'success');
+              this.renderPinnedFolders();
+              this.refreshExplorer();
+              await this._refreshActiveFolderTab();
+            }
+          } else {
+            const imported = await ucb.importFilesFromPaths([filePath]);
+            if (imported && imported.length > 0) {
+              for (const c of imported) { await ucb.moveClipToFolder(c.id, folder.id); }
+              await this.loadData();
+              this.renderPinnedFolders();
+              this.renderClipGrid();
+              this.renderLeftSidebar();
+              this.renderLibraryTabs();
+              this.toast(`Imported to ${folder.name}`, 'success');
+            }
+          }
+          return;
+        }
+        if (folder.path) {
+          // Filesystem-backed folder: copy the clip's file to that directory
+          await ucb.copyClipToPath(clipId, folder.path);
+          this.toast(`Copied to ${folder.name}`, 'success');
+          this.renderPinnedFolders();
+          this.refreshExplorer();
+          await this._refreshActiveFolderTab();
+        } else {
+          // DB-only folder: move clip to folder in database
+          const clip = this.allClips.find(c => c.id === clipId);
+          const oldFolderId = clip ? clip.folderId : null;
+          await ucb.moveClipToFolder(clipId, folder.id);
+          this.pushUndo({ type: 'move', clipId, oldFolderId, newFolderId: folder.id, folderName: folder.name });
+          await this.loadData();
+          this.renderPinnedFolders();
+          this.renderClipGrid();
+          this.renderLibraryTabs();
+          this.refreshExplorer();
+          this.toastWithUndo(`Moved to ${folder.name}`);
+        }
+        return;
+      }
+      // 3. External OS file drop to pinned folder
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const filePaths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean);
+        if (filePaths.length > 0 && folder.path) {
+          const results = await ucb.copyFilesToDir(filePaths, folder.path);
+          const copied = results.filter(r => r.success).length;
+          if (copied > 0) {
+            this.toast(`Copied ${copied} file${copied > 1 ? 's' : ''} to ${folder.name}`, 'success');
+            this.renderPinnedFolders();
+            this.refreshExplorer();
+            await this._refreshActiveFolderTab();
+          }
+        } else if (filePaths.length > 0 && !folder.path) {
+          const imported = await ucb.importFilesFromPaths(filePaths);
+          if (imported && imported.length > 0) {
+            for (const clip of imported) { await ucb.moveClipToFolder(clip.id, folder.id); }
+            await this.loadData();
+            this.renderPinnedFolders();
+            this.renderClipGrid();
+            this.renderLeftSidebar();
+            this.renderLibraryTabs();
+            this.toast(`Imported ${imported.length} file${imported.length > 1 ? 's' : ''} to ${folder.name}`, 'success');
+          }
+        }
       }
     });
 
@@ -738,6 +1182,22 @@ const App = {
     document.querySelectorAll('.group-item').forEach(gi => gi.classList.remove('active'));
   },
 
+  showClipInLibrary(clipId) {
+    // Switch to All Clips view so the clip is guaranteed to be in the grid
+    this.showAllClips();
+    // After render, find the clip card and scroll to it with a highlight
+    requestAnimationFrame(() => {
+      const card = document.querySelector(`.clip-card[data-clip-id="${clipId}"]`);
+      if (!card) return;
+      const clipArea = document.getElementById('clipArea');
+      // Scroll the card into view within the clip area
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Highlight with a flash animation
+      card.classList.add('library-highlight');
+      setTimeout(() => card.classList.remove('library-highlight'), 2000);
+    });
+  },
+
   showFilteredView(label, filteredClips) {
     // Check if a library tab already exists for this label
     let tab = this.libraryTabs.find(t => t.label === label);
@@ -755,6 +1215,12 @@ const App = {
   },
 
   renderLibraryTabs() {
+    // Ensure the permanent 'all' tab always exists and is first
+    if (!this.libraryTabs.find(t => t.id === 'all')) {
+      this.libraryTabs.unshift({ id: 'all', label: 'All Clips', filter: null });
+    }
+    // Remove any duplicate 'All Clips' tabs (keep only the one with id 'all')
+    this.libraryTabs = this.libraryTabs.filter(t => t.id === 'all' || t.label !== 'All Clips');
     const container = document.getElementById('libraryTabs');
     container.innerHTML = '';
     this.libraryTabs.forEach(tab => {
@@ -784,6 +1250,80 @@ const App = {
         }
         this.switchLibraryTab(tab.id);
       });
+      // Right-click context menu for closable tabs
+      if (closable) {
+        el.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showLibraryTabContextMenu(e, tab); });
+      }
+
+      // Folder-based library tabs accept file drops
+      if (tab.folderPath) {
+        el.addEventListener('dragover', (e) => {
+          // Accept explorer drags, external file drags, and clip card drags
+          if (this._internalDrag || e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/plain')) {
+            e.preventDefault();
+            e.stopPropagation();
+            el.classList.add('drag-over');
+          }
+        });
+        el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+        el.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          el.classList.remove('drag-over');
+          document.getElementById('dropZone').classList.add('hidden');
+          // Internal explorer file drop — use stored paths (native drag clears dataTransfer)
+          if (this._internalDrag && this._explorerDragPaths && this._explorerDragPaths.length > 0) {
+            try {
+              const results = await ucb.copyFilesToDir(this._explorerDragPaths, tab.folderPath);
+              const copied = results.filter(r => r.success).length;
+              if (copied > 0) {
+                this.pushUndo({ type: 'explorerCopy', entries: results });
+                this.renderPinnedFolders();
+                await this._refreshActiveFolderTab();
+                this.refreshExplorer();
+                this.toast(`Copied ${copied} file${copied > 1 ? 's' : ''} to ${tab.label} — Ctrl+Z to undo`, 'success');
+              }
+            } catch {}
+            return;
+          }
+          // External file drop from OS — copy to folder filesystem only
+          if (!this._internalDrag && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const srcPaths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean);
+            if (srcPaths.length > 0) {
+              await ucb.copyFilesToDir(srcPaths, tab.folderPath);
+              this.renderPinnedFolders();
+              await this._refreshActiveFolderTab();
+              this.refreshExplorer();
+              this.toast(`Copied ${srcPaths.length} file${srcPaths.length > 1 ? 's' : ''} to ${tab.label}`, 'success');
+            }
+            return;
+          }
+          // Clip card drop — copy clip file to folder
+          const clipId = e.dataTransfer.getData('text/plain');
+          if (clipId && this._internalDrag) {
+            // Virtual filesystem clip (from folder tab) — ID starts with 'fs_'
+            if (clipId.startsWith('fs_')) {
+              const filePath = clipId.substring(3);
+              const results = await ucb.copyFilesToDir([filePath], tab.folderPath);
+              const copied = results.filter(r => r.success).length;
+              if (copied > 0) {
+                this.pushUndo({ type: 'explorerCopy', entries: results });
+                this.renderPinnedFolders();
+                await this._refreshActiveFolderTab();
+                this.refreshExplorer();
+                this.toast(`Copied to ${tab.label} — Ctrl+Z to undo`, 'success');
+              }
+            } else {
+              await ucb.copyClipToPath(clipId, tab.folderPath);
+              this.renderPinnedFolders();
+              await this._refreshActiveFolderTab();
+              this.refreshExplorer();
+              this.toast(`Copied to ${tab.label}`, 'success');
+            }
+          }
+        });
+      }
+
       container.appendChild(el);
     });
     this._updateLibTabFades();
@@ -826,6 +1366,7 @@ const App = {
   },
 
   closeLibraryTab(tabId) {
+    if (tabId === 'all') return; // Never close the permanent All Clips tab
     this.libraryTabs = this.libraryTabs.filter(t => t.id !== tabId);
     if (this.activeLibTab === tabId) {
       this.activeLibTab = 'all';
@@ -845,13 +1386,13 @@ const App = {
     } else if (label === 'Other') {
       this.clips = this.allClips.filter(c => !['image','text','link','code'].includes(c.type));
     } else if (tab.folderPath) {
-      // Folder-based tab: show clips from this folder
-      const folder = this.folders.find(f => f.path === tab.folderPath);
-      if (folder) {
-        this.clips = this.allClips.filter(c => c.folderId === folder.id);
+      // Folder-based tab: load filesystem contents directly (no DB import)
+      if (this._folderClipsCache && this._folderClipsCache.path === tab.folderPath) {
+        this.clips = [...this._folderClipsCache.clips];
       } else {
         this.clips = [];
       }
+      this._loadFolderTabClips(tab.folderPath).catch(() => {});
     } else {
       // Date groups or custom — fallback to all
       this.clips = [...this.allClips];
@@ -863,17 +1404,84 @@ const App = {
     this.renderLibraryTabs();
   },
 
-  openFolderInLibrary(folderPath, folderName) {
+  /**
+   * Load filesystem contents for a folder-backed library tab.
+   * Creates virtual clip objects from filesystem entries — no DB import.
+   */
+  async _loadFolderTabClips(folderPath) {
+    try {
+      const entries = await ucb.listDirectory(folderPath);
+      if (!entries) return;
+      const files = entries.filter(e => !e.isDirectory);
+      const imageExts = ['.png','.jpg','.jpeg','.gif','.bmp','.webp','.svg','.tiff','.ico'];
+      const textExts = ['.txt','.md','.json','.csv','.xml','.html','.css','.js','.ts','.py'];
+      this.clips = files.map(f => {
+        const ext = (f.extension || '').toLowerCase();
+        let type = 'file';
+        if (imageExts.includes(ext)) type = 'image';
+        else if (textExts.includes(ext)) type = 'text';
+        return {
+          id: 'fs_' + f.path,
+          type,
+          title: f.name,
+          filePath: f.path,
+          fileSize: f.size,
+          createdAt: f.modifiedAt,
+          favorite: false,
+          _isVirtual: true
+        };
+      });
+      this._folderClipsCache = { path: folderPath, clips: [...this.clips] };
+      this.applySortAndRender();
+      // Highlight pending file in library after render
+      if (this._pendingLibHighlight) {
+        requestAnimationFrame(() => {
+          this._highlightLibraryClip(this._pendingLibHighlight);
+          this._pendingLibHighlight = null;
+        });
+      }
+    } catch (err) {
+      console.warn('[App] _loadFolderTabClips failed:', err);
+      // Folder may have been deleted — show empty state and close the tab
+      this.clips = [];
+      this._folderClipsCache = null;
+      this.applySortAndRender();
+      if (err && (err.message || '').includes('ENOENT')) {
+        this.toast('Folder no longer exists — tab closed', 'info');
+        const tab = this.libraryTabs.find(t => t.folderPath === folderPath);
+        if (tab) this.closeLibraryTab(tab.id);
+      }
+    }
+  },
+
+  /** Refresh the active folder tab's file list from filesystem */
+  async _refreshActiveFolderTab() {
+    const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+    if (activeTab && activeTab.folderPath) {
+      await this._loadFolderTabClips(activeTab.folderPath);
+    }
+  },
+
+  openFolderInLibrary(folderPath, folderName, highlightFilePath) {
     const name = folderName || folderPath.replace(/\\/g, '/').split('/').pop();
     // Check if tab already exists for this path
     const existing = this.libraryTabs.find(t => t.folderPath === folderPath);
     if (existing) {
       this.switchLibraryTab(existing.id);
+      if (highlightFilePath) this._pendingLibHighlight = highlightFilePath;
+      // Re-load to ensure clips are rendered, then highlight
+      this._loadFolderTabClips(folderPath).then(() => {
+        if (this._pendingLibHighlight) {
+          this._highlightLibraryClip(this._pendingLibHighlight);
+          this._pendingLibHighlight = null;
+        }
+      });
       return;
     }
     const tabId = 'folder_' + Date.now();
     this.libraryTabs.push({ id: tabId, label: name, filter: null, folderPath });
     this.activeLibTab = tabId;
+    if (highlightFilePath) this._pendingLibHighlight = highlightFilePath;
     this._applyLibTabFilter({ id: tabId, label: name, folderPath });
   },
 
@@ -972,13 +1580,16 @@ const App = {
         this._internalDrag = true;
         this._dragClipId = clip.id;
         e.dataTransfer.setData('text/plain', clip.id);
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
         item.style.opacity = '0.5';
       });
       item.addEventListener('dragend', () => {
         this._internalDrag = false;
         this._dragClipId = null;
+        this._explorerDragPaths = null;
         item.style.opacity = '';
+        document.getElementById('dropZone').classList.add('hidden');
+        document.querySelector('.clip-area-wrapper')?.classList.remove('drag-highlight');
       });
 
       list.appendChild(item);
@@ -1125,12 +1736,26 @@ const App = {
     grid.classList.remove('hidden');
     grid.innerHTML = '';
 
-    let lastDateLabel = '';
-    this.clips.forEach((clip, index) => {
+    // Incremental rendering: render in batches for memory efficiency
+    this._clipRenderIndex = 0;
+    this._clipLastDateLabel = '';
+    this._renderClipBatch(grid, 60);
+    this._applyLibGridMode();
+    this._updateClipAreaFades();
+    // Lazy load more on scroll
+    this._setupClipLazyLoad(grid);
+  },
+
+  _CLIP_BATCH_SIZE: 40,
+
+  _renderClipBatch(grid, count) {
+    const end = Math.min(this._clipRenderIndex + count, this.clips.length);
+    for (let index = this._clipRenderIndex; index < end; index++) {
+      const clip = this.clips[index];
       // Insert date separator if label changed
       const dateLabel = this._getDateLabel(clip.createdAt);
-      if (dateLabel !== lastDateLabel) {
-        lastDateLabel = dateLabel;
+      if (dateLabel !== this._clipLastDateLabel) {
+        this._clipLastDateLabel = dateLabel;
         const sep = document.createElement('div');
         sep.className = 'clip-date-separator';
         sep.textContent = dateLabel;
@@ -1166,7 +1791,7 @@ const App = {
       card.innerHTML = `
         <div class="clip-card-thumb">${thumbContent}</div>
         <div class="clip-card-info">
-          <div class="clip-card-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 30))}</div>
+          <div class="clip-card-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 60))}</div>
           <div class="clip-card-meta"><span>${time}</span><span>${size}</span></div>
         </div>
         ${overlayBtn}
@@ -1226,7 +1851,7 @@ const App = {
       card.addEventListener('dragstart', (e) => {
         this._internalDrag = true; this._dragClipId = clip.id;
         e.dataTransfer.setData('text/plain', clip.id);
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
         card.classList.add('dragging');
       });
       card.addEventListener('dragend', () => {
@@ -1236,9 +1861,21 @@ const App = {
       });
 
       grid.appendChild(card);
-    });
-    this._applyLibGridMode();
-    this._updateClipAreaFades();
+    }
+    this._clipRenderIndex = end;
+  },
+
+  _setupClipLazyLoad(grid) {
+    const area = document.getElementById('clipArea');
+    if (this._clipLazyScrollHandler) area.removeEventListener('scroll', this._clipLazyScrollHandler);
+    this._clipLazyScrollHandler = () => {
+      if (this._clipRenderIndex >= this.clips.length) return;
+      // Load more when within 300px of bottom
+      if (area.scrollTop + area.clientHeight >= area.scrollHeight - 300) {
+        this._renderClipBatch(grid, this._CLIP_BATCH_SIZE);
+      }
+    };
+    area.addEventListener('scroll', this._clipLazyScrollHandler);
   },
 
   _updateClipAreaFades() {
@@ -1257,6 +1894,18 @@ const App = {
   },
 
   async quickDeleteClip(clipId) {
+    const clip = this.clips.find(c => c.id === clipId);
+    // Virtual filesystem clip — delete from filesystem
+    if (clip && clip._isVirtual && clip.filePath) {
+      await ucb.deleteFiles([clip.filePath]);
+      this.clips = this.clips.filter(c => c.id !== clipId);
+      this.closeTab(clipId);
+      this.renderClipGrid();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+      this.toast('File moved to Recycle Bin', 'info');
+      return;
+    }
     const clipData = await ucb.softDeleteClip(clipId);
     this.clips = this.clips.filter(c => c.id !== clipId);
     this.allClips = this.allClips.filter(c => c.id !== clipId);
@@ -1274,12 +1923,17 @@ const App = {
   },
 
   // ===== Editor Panel (bottom sub-panel) =====
-  openEditor(clip) {
+  async openEditor(clip) {
+    // For virtual filesystem clips, lazy-load text content
+    if (clip._isVirtual && (clip.type === 'text' || clip.type === 'file') && clip.content === undefined) {
+      try { clip.content = await ucb.readTextFile(clip.filePath); } catch { clip.content = ''; }
+    }
     if (!this.openTabs.find(t => t.id === clip.id)) this.openTabs.push(clip);
     this.activeTabId = clip.id;
     this.activeClip = clip;
     this.editorOpen = true;
     this.renderTabs();
+    this._saveTabState();
 
     const resizeHandle = document.getElementById('panelResizeHandle');
     const canvas = document.getElementById('editorCanvas');
@@ -1482,6 +2136,7 @@ const App = {
       }
     }
     this.renderTabs();
+    this._saveTabState();
   },
 
   renderTabs() {
@@ -1566,7 +2221,7 @@ const App = {
         this._internalDrag = true;
         this._dragClipId = clip.id;
         e.dataTransfer.setData('text/plain', clip.id);
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
       });
       tab.addEventListener('dragend', () => {
         this._internalDrag = false;
@@ -1584,12 +2239,13 @@ const App = {
     const fl = document.getElementById('tabFadeLeft');
     const fr = document.getElementById('tabFadeRight');
     if (!tabList || !fl || !fr) return;
+    if (tabList._fadeHandler) tabList.removeEventListener('scroll', tabList._fadeHandler);
     const update = () => {
       fl.classList.toggle('visible', tabList.scrollLeft > 4);
       fr.classList.toggle('visible', tabList.scrollLeft < tabList.scrollWidth - tabList.clientWidth - 4);
     };
+    tabList._fadeHandler = update;
     update();
-    tabList.removeEventListener('scroll', update);
     tabList.addEventListener('scroll', update);
   },
 
@@ -1598,6 +2254,7 @@ const App = {
     const fl = document.getElementById('libFadeLeft');
     const fr = document.getElementById('libFadeRight');
     if (!tabList || !fl || !fr) return;
+    if (tabList._fadeHandler) tabList.removeEventListener('scroll', tabList._fadeHandler);
     const update = () => {
       fl.classList.toggle('visible', tabList.scrollLeft > 4);
       const canScrollRight = tabList.scrollLeft < tabList.scrollWidth - tabList.clientWidth - 4;
@@ -1610,8 +2267,8 @@ const App = {
         fr.style.right = (headerRect.right - tabsRect.right) + 'px';
       }
     };
+    tabList._fadeHandler = update;
     update();
-    tabList.removeEventListener('scroll', update);
     tabList.addEventListener('scroll', update);
   },
 
@@ -1630,20 +2287,41 @@ const App = {
         const toClose = [...this.selectedTabs];
         this.selectedTabs.clear();
         toClose.forEach(id => this.closeTab(id));
+        this._saveTabState();
+      }});
+    }
+    const tabIdx = this.openTabs.findIndex(t => t.id === clip.id);
+    const tabsToRight = this.openTabs.slice(tabIdx + 1);
+    const otherTabs = this.openTabs.filter(t => t.id !== clip.id);
+    items.push(
+      { label: 'Close All Tabs', action: () => { this.openTabs = []; this.selectedTabs.clear(); this.activeTabId = null; this.activeClip = null; this.closeEditor(); this.renderTabs(); this._saveTabState(); }},
+    );
+    if (tabsToRight.length > 0) {
+      items.push({ label: `Close Tabs to Right (${tabsToRight.length})`, action: () => {
+        this.openTabs.splice(tabIdx + 1);
+        tabsToRight.forEach(t => { if (this.activeTabId === t.id) { this.activeTabId = clip.id; this.activeClip = clip; }});
+        this.selectedTabs.clear();
+        this.renderTabs();
+        this._saveTabState();
+      }});
+    }
+    if (otherTabs.length > 0) {
+      items.push({ label: `Close Other Tabs (${otherTabs.length})`, action: () => {
+        this.openTabs = [this.openTabs[tabIdx]];
+        this.activeTabId = clip.id;
+        this.activeClip = clip;
+        this.selectedTabs.clear();
+        this.renderTabs();
+        this._saveTabState();
       }});
     }
     items.push(
-      { label: 'Close All Tabs', action: () => { this.openTabs = []; this.selectedTabs.clear(); this.activeTabId = null; this.activeClip = null; this.closeEditor(); this.renderTabs(); }},
-      { label: 'Close Tabs to the Right', action: () => {
-        const idx = this.openTabs.findIndex(t => t.id === clip.id);
-        const removed = this.openTabs.splice(idx + 1);
-        removed.forEach(t => { if (this.activeTabId === t.id) { this.activeTabId = clip.id; this.activeClip = clip; }});
-        this.selectedTabs.clear();
-        this.renderTabs();
-      }}
+      'separator',
+      { label: 'Show in Library', action: () => this.showClipInLibrary(clip.id) }
     );
 
     items.forEach(item => {
+      if (item === 'separator') { menu.appendChild(Object.assign(document.createElement('div'), { className: 'context-menu-separator' })); return; }
       const btn = document.createElement('button');
       btn.className = 'context-menu-item';
       btn.textContent = item.label;
@@ -1653,6 +2331,11 @@ const App = {
 
     document.body.appendChild(menu);
     this.contextMenu = menu;
+    requestAnimationFrame(() => {
+      const r = menu.getBoundingClientRect();
+      if (r.right > window.innerWidth) menu.style.left = (window.innerWidth - r.width - 8) + 'px';
+      if (r.bottom > window.innerHeight) menu.style.top = (window.innerHeight - r.height - 8) + 'px';
+    });
   },
 
   // ===== File Explorer (right sidebar) =====
@@ -1667,26 +2350,7 @@ const App = {
     const container = document.getElementById('explorerQuickAccess');
     container.innerHTML = '';
 
-    // Pinned folders from DB (with filesystem paths)
-    const pinnedWithPaths = this.folders.filter(f => f.pinned && f.path);
-    if (pinnedWithPaths.length > 0) {
-      const pinHeader = document.createElement('div');
-      pinHeader.className = 'qa-header';
-      pinHeader.textContent = 'PINNED';
-      container.appendChild(pinHeader);
-
-      pinnedWithPaths.forEach(f => {
-        const div = document.createElement('div');
-        div.className = 'qa-item';
-        div.style.color = f.color || 'var(--text-secondary)';
-        div.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="${f.color || '#4cd964'}" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg><span>${this.escapeHtml(f.name)}</span>`;
-        div.addEventListener('click', () => this.navigateExplorer(f.path));
-        div.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showExplorerContextMenu(e, f.path, f.name, true); });
-        container.appendChild(div);
-      });
-    }
-
-    // System quick access
+    // Quick access header
     const sysHeader = document.createElement('div');
     sysHeader.className = 'qa-header';
     sysHeader.textContent = 'QUICK ACCESS';
@@ -1713,23 +2377,86 @@ const App = {
 
   explorerForwardHistory: [],
 
-  refreshExplorer() {
-    if (this.explorerPath) {
-      ucb.listDirectory(this.explorerPath).then(entries => this.renderExplorerFiles(entries));
+  async createNewExplorerFolder() {
+    if (!this.explorerPath) return;
+    // Prompt for folder name
+    let name = await Dialogs.prompt('New Folder', 'Enter folder name:', 'New Folder');
+    if (!name) return;
+    let safeName = name.replace(/[<>:"|?*]/g, '_').trim();
+    if (!safeName) { this.toast('Invalid folder name', 'error'); return; }
+    try {
+      // Check for existing folder and auto-suffix if needed
+      let result = await ucb.createFsDirectory(this.explorerPath, safeName);
+      if (!result.success && result.error && result.error.includes('already exists')) {
+        // Auto-increment: "Name (2)", "Name (3)", etc.
+        let suffix = 2;
+        let newName;
+        do {
+          newName = `${safeName} (${suffix++})`;
+          result = await ucb.createFsDirectory(this.explorerPath, newName);
+        } while (!result.success && result.error && result.error.includes('already exists') && suffix < 100);
+        if (result.success) {
+          this.refreshExplorer();
+          this.toast(`Created "${newName}" ("${safeName}" already existed)`, 'success');
+        } else {
+          this.toast(result.error || 'Failed to create folder', 'error');
+        }
+      } else if (result.success) {
+        this.refreshExplorer();
+        this.toast(`Created "${safeName}"`, 'success');
+      } else {
+        this.toast(result.error || 'Failed to create folder', 'error');
+      }
+    } catch (e) {
+      this.toast('Failed to create folder', 'error');
     }
   },
 
-  async navigateExplorer(dirPath) {
+  refreshExplorer() {
+    if (this.explorerPath) {
+      ucb.listDirectory(this.explorerPath).then(entries => {
+        if (entries && entries.length >= 0) {
+          this.renderExplorerFiles(entries);
+        }
+      }).catch(() => {
+        // Directory may have been deleted externally — fall back to parent or home
+        const parent = this.explorerPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        if (parent && parent !== this.explorerPath) {
+          this.toast('Folder no longer exists — navigating to parent', 'info');
+          this.explorerPath = parent;
+          this.renderExplorerBreadcrumb();
+          this.refreshExplorer();
+        } else {
+          this.explorerPath = this.explorerHomePath;
+          this.renderExplorerBreadcrumb();
+          this.refreshExplorer();
+        }
+      });
+    }
+  },
+
+  async navigateExplorer(dirPath, highlightPath) {
     if (!dirPath) return;
-    // Unwatch previous directory and watch the new one
-    if (this.explorerPath) ucb.unwatchDirectory(this.explorerPath);
-    this.explorerHistory.push(this.explorerPath);
-    this.explorerForwardHistory = [];
-    this.explorerPath = dirPath;
-    ucb.watchDirectory(dirPath);
-    this.renderExplorerBreadcrumb();
-    const entries = await ucb.listDirectory(dirPath);
-    this.renderExplorerFiles(entries);
+    // Verify directory exists before navigating
+    try {
+      const entries = await ucb.listDirectory(dirPath);
+      if (!entries) {
+        this.toast('Folder not found', 'error');
+        return;
+      }
+      // Unwatch previous directory and watch the new one
+      if (this.explorerPath) ucb.unwatchDirectory(this.explorerPath);
+      this.explorerHistory.push(this.explorerPath);
+      this.explorerForwardHistory = [];
+      this.explorerPath = dirPath;
+      ucb.watchDirectory(dirPath);
+      this.renderExplorerBreadcrumb();
+      this.renderExplorerFiles(entries);
+      // Scroll to and highlight the target file
+      if (highlightPath) this._highlightExplorerItem(highlightPath);
+    } catch (e) {
+      this.toast('Cannot open folder — it may have been deleted', 'error');
+    }
   },
 
   explorerGoBack() {
@@ -1740,7 +2467,7 @@ const App = {
     this.explorerPath = prev;
     ucb.watchDirectory(prev);
     this.renderExplorerBreadcrumb();
-    ucb.listDirectory(prev).then(entries => this.renderExplorerFiles(entries));
+    ucb.listDirectory(prev).then(entries => this.renderExplorerFiles(entries || [])).catch(() => this.renderExplorerFiles([]));
   },
 
   explorerGoForward() {
@@ -1751,7 +2478,7 @@ const App = {
     this.explorerPath = next;
     ucb.watchDirectory(next);
     this.renderExplorerBreadcrumb();
-    ucb.listDirectory(next).then(entries => this.renderExplorerFiles(entries));
+    ucb.listDirectory(next).then(entries => this.renderExplorerFiles(entries || [])).catch(() => this.renderExplorerFiles([]));
   },
 
   renderExplorerBreadcrumb() {
@@ -1795,13 +2522,13 @@ const App = {
         sep.style.cssText = 'opacity:0.4;pointer-events:none;margin:0 1px';
         inner.appendChild(sep);
       }
+      const isLast = i === parts.length - 1;
+      const targetPath = parts.slice(0, i + 1).join('/');
       const seg = document.createElement('span');
       seg.textContent = part;
-      seg.style.cssText = 'cursor:pointer;border-radius:3px;padding:1px 3px;transition:background 0.15s';
+      seg.style.cssText = 'cursor:pointer;border-radius:3px;padding:1px 3px;transition:background 0.15s' + (isLast ? ';font-weight:600;color:var(--text-primary)' : '');
       seg.addEventListener('mouseenter', () => { seg.style.background = 'var(--bg-hover)'; seg.style.color = 'var(--text-primary)'; });
       seg.addEventListener('mouseleave', () => { seg.style.background = ''; seg.style.color = ''; });
-      const targetPath = parts.slice(0, i + 1).join('/');
-      const isLast = i === parts.length - 1;
       seg.addEventListener('click', (e) => {
         e.stopPropagation();
         if (!isLast) this.navigateExplorer(targetPath);
@@ -1823,6 +2550,7 @@ const App = {
     const fl = document.getElementById('bcFadeLeft');
     const fr = document.getElementById('bcFadeRight');
     if (!bc || !fl || !fr) return;
+    if (bc._fadeHandler) bc.removeEventListener('scroll', bc._fadeHandler);
     const update = () => {
       // RTL: scrollLeft is negative or 0
       const maxScroll = bc.scrollWidth - bc.clientWidth;
@@ -1830,8 +2558,8 @@ const App = {
       fl.classList.toggle('visible', scrollPos < maxScroll - 4);
       fr.classList.toggle('visible', scrollPos > 4);
     };
+    bc._fadeHandler = update;
     update();
-    bc.removeEventListener('scroll', update);
     bc.addEventListener('scroll', update);
   },
 
@@ -1848,6 +2576,8 @@ const App = {
 
   _explorerSortMode: 'name-asc',
 
+  _showFileExtensions: true,
+
   _sortExplorerEntries(entries) {
     const mode = this._explorerSortMode;
     // Directories always first
@@ -1856,8 +2586,8 @@ const App = {
     const sorter = (a, b) => {
       if (mode === 'name-asc') return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
       if (mode === 'name-desc') return b.name.localeCompare(a.name, undefined, { sensitivity: 'base' });
-      if (mode === 'date-desc') return (b.modified || 0) - (a.modified || 0);
-      if (mode === 'date-asc') return (a.modified || 0) - (b.modified || 0);
+      if (mode === 'date-desc') return (b.modifiedAt || 0) - (a.modifiedAt || 0);
+      if (mode === 'date-asc') return (a.modifiedAt || 0) - (b.modifiedAt || 0);
       if (mode === 'size-desc') return (b.size || 0) - (a.size || 0);
       if (mode === 'size-asc') return (a.size || 0) - (b.size || 0);
       if (mode === 'type') return (a.extension || '').localeCompare(b.extension || '');
@@ -1869,11 +2599,17 @@ const App = {
   },
 
   renderExplorerFiles(entries) {
+    // Guard: always treat entries as an array
+    if (!Array.isArray(entries)) entries = [];
     this._lastExplorerEntries = entries;
     this._explorerSelectedPaths = new Set();
     this._explorerLastClickIdx = -1;
     // Clean up previous rubber-band listeners
     if (this._explorerRubberCleanup) { this._explorerRubberCleanup(); this._explorerRubberCleanup = null; }
+    // Clean up previous container-level event listeners
+    if (this._explorerContainerCleanup) { this._explorerContainerCleanup(); this._explorerContainerCleanup = null; }
+    // Clean up previous image lazy-load observer
+    if (this._explorerImgObserver) { this._explorerImgObserver.disconnect(); this._explorerImgObserver = null; }
     const container = document.getElementById('explorerFileList');
     container.innerHTML = '';
     container.style.position = 'relative';
@@ -1893,6 +2629,7 @@ const App = {
     const imgExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
     const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.html', '.css', '.xml', '.csv', '.log', '.py', '.java', '.c', '.cpp', '.h'];
     const showThumbs = this._explorerThumbMode > 0;
+    const gridNameLen = this._explorerThumbMode === 2 ? 48 : 30;
 
     sorted.forEach((entry, idx) => {
       const item = document.createElement('div');
@@ -1902,23 +2639,54 @@ const App = {
       const isImage = !entry.isDirectory && imgExts.includes(entry.extension);
       const isText = !entry.isDirectory && textExts.includes(entry.extension);
 
+      // Check if this directory matches a pinned folder for custom color
+      let folderColor = '#ffcc00';
+      let pinnedFolder = null;
+      if (entry.isDirectory) {
+        const entryNorm = entry.path.replace(/\\/g, '/');
+        pinnedFolder = this.folders.find(f => f.pinned && f.path && f.path.replace(/\\/g, '/') === entryNorm);
+        if (pinnedFolder) folderColor = pinnedFolder.color || '#4cd964';
+      }
+
+      const pinIcon = pinnedFolder ? '<img src="assets/pin.svg" width="12" height="12" style="margin-left:2px;flex-shrink:0;vertical-align:middle;filter:brightness(0.85)" />' : '';
       let icon = '';
       if (entry.isDirectory) {
-        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffcc00" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
+        icon = showThumbs
+          ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="${folderColor}22" stroke="${folderColor}" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`
+          : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${folderColor}" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`;
       } else if (isImage) {
         icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+      } else if (isText) {
+        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
       } else {
         icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
       }
 
       const size = entry.isDirectory ? '' : this.formatSize(entry.size);
+      let displayName = pinnedFolder ? pinnedFolder.name : entry.name;
+
+      // Small icon badge for grid mode thumbnails (top-left corner)
+      const iconBadge = showThumbs && !entry.isDirectory ? `<span class="file-thumb-badge">${icon}</span>` : '';
 
       if (showThumbs && isImage) {
-        item.innerHTML = `<div class="file-item-thumb"><img src="file://${entry.path.replace(/\\/g, '/')}" loading="lazy" /></div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 24))}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-thumb">${iconBadge}<div class="explorer-img-placeholder"></div></div><span class="file-item-name">${this.escapeHtml(this.midTruncate(displayName, gridNameLen))}${pinIcon}</span><span class="file-item-meta">${size}</span>`;
+        item.dataset.lazySrc = `file://${entry.path.replace(/\\/g, '/')}`;
+      } else if (showThumbs && isText) {
+        // Load text preview for text files in grid mode
+        const textThumbId = 'txtprev_' + idx;
+        item.innerHTML = `<div class="file-item-thumb file-item-text-preview" id="${textThumbId}">${iconBadge}<div class="explorer-text-preview-loading">${icon}</div></div><span class="file-item-name">${this.escapeHtml(this.midTruncate(displayName, gridNameLen))}${pinIcon}</span><span class="file-item-meta">${size}</span>`;
+        // Async load text content (preserve icon badge)
+        ucb.readTextFile(entry.path).then(text => {
+          const el = document.getElementById(textThumbId);
+          if (el) el.innerHTML = `${iconBadge}<div class="explorer-text-content">${this.escapeHtml(text || '')}</div>`;
+        }).catch(() => {});
+      } else if (showThumbs && entry.isDirectory) {
+        const pinnedStyle = pinnedFolder ? `outline:1.5px solid ${folderColor}44;outline-offset:-1.5px;border-radius:8px` : '';
+        item.innerHTML = `<div class="file-item-thumb file-item-folder-thumb" style="${pinnedStyle}">${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(displayName, gridNameLen))}${pinIcon}</span><span class="file-item-meta">${size}</span>`;
       } else if (showThumbs) {
-        item.innerHTML = `<div class="file-item-thumb">${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 24))}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-thumb">${iconBadge}${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(displayName, gridNameLen))}${pinIcon}</span><span class="file-item-meta">${size}</span>`;
       } else {
-        item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name">${this.escapeHtml(this.midTruncate(entry.name, 28))}</span><span class="file-item-meta">${size}</span>`;
+        item.innerHTML = `<div class="file-item-icon">${icon}</div><span class="file-item-name" ${pinnedFolder ? `style="color:${folderColor}"` : ''}>${this.escapeHtml(this.midTruncate(displayName, 60))}${pinIcon}</span><span class="file-item-meta">${size}</span>`;
       }
 
       // Right-click context menu
@@ -1927,7 +2695,11 @@ const App = {
         if (!this._explorerSelectedPaths.has(entry.path)) {
           this._explorerSelectSingle(idx);
         }
-        this.showExplorerContextMenu(e, entry.path, entry.name, false, entry.isDirectory);
+        if (pinnedFolder) {
+          this.showFolderContextMenu(e, pinnedFolder);
+        } else {
+          this.showExplorerContextMenu(e, entry.path, entry.name, false, entry.isDirectory);
+        }
       });
 
       // Click = select; double-click = open
@@ -1963,26 +2735,112 @@ const App = {
         }
       });
 
-      // Drag (directories are drop targets)
-      if (entry.isDirectory) {
-        item.draggable = true;
-        item.addEventListener('dragstart', (e) => {
-          this._internalDrag = true;
+      // Drag — all items are draggable (files and directories)
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        this._internalDrag = true;
+        this._explorerDragPaths = this._explorerSelectedPaths.size > 0 && this._explorerSelectedPaths.has(entry.path)
+          ? [...this._explorerSelectedPaths]
+          : [entry.path];
+        if (entry.isDirectory) {
           this._dragFolderPath = entry.path;
           this._dragFolderName = entry.name;
           e.dataTransfer.setData('text/x-folder-path', entry.path);
-          e.dataTransfer.effectAllowed = 'copyMove';
-        });
-        item.addEventListener('dragend', () => { this._internalDrag = false; this._dragFolderPath = null; this._dragFolderName = null; document.getElementById('dropZone').classList.add('hidden'); });
-        item.addEventListener('dragover', (e) => { e.preventDefault(); item.classList.add('drag-over'); });
+        }
+        e.dataTransfer.setData('text/x-explorer-paths', JSON.stringify(this._explorerDragPaths));
+        e.dataTransfer.effectAllowed = 'copyMove';
+        item.classList.add('dragging');
+        // Custom drag image for multi-item drag
+        const dragCount = this._explorerDragPaths.length;
+        if (dragCount > 1) {
+          const ghost = document.createElement('div');
+          ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border,#333);border-radius:6px;color:#fff;font-size:11px;font-family:inherit;white-space:nowrap;pointer-events:none;';
+          ghost.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>${dragCount} items</span>`;
+          document.body.appendChild(ghost);
+          e.dataTransfer.setDragImage(ghost, 0, 0);
+          requestAnimationFrame(() => requestAnimationFrame(() => ghost.remove()));
+        }
+        // NOTE: native startDrag intentionally omitted — it hijacks HTML5 drag
+        // and prevents in-app drops on pinned folders / library tabs.
+      });
+      item.addEventListener('dragend', () => {
+        this._internalDrag = false;
+        this._explorerDragPaths = null;
+        this._dragFolderPath = null;
+        this._dragFolderName = null;
+        item.classList.remove('dragging');
+        document.getElementById('dropZone').classList.add('hidden');
+      });
+
+      // Directories are also drop targets (for files from explorer or clips)
+      if (entry.isDirectory) {
+        item.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; item.classList.add('drag-over'); });
         item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
         item.addEventListener('drop', async (e) => {
           e.preventDefault(); item.classList.remove('drag-over');
+          // 1. Internal explorer file move
+          const explorerPaths = e.dataTransfer.getData('text/x-explorer-paths');
+          if (explorerPaths && this._internalDrag) {
+            try {
+              const paths = JSON.parse(explorerPaths);
+              // Don't drop a folder into itself
+              if (paths.includes(entry.path)) return;
+              // Skip if all files are already in this directory
+              const targetNorm = entry.path.replace(/\\/g, '/');
+              const allAlreadyHere = paths.every(p => {
+                const parent = p.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+                return parent === targetNorm;
+              });
+              if (allAlreadyHere) return;
+              const results = await ucb.moveFilesToDir(paths, entry.path);
+              const moved = results.filter(r => r.success).length;
+              if (moved > 0) {
+                this.pushUndo({ type: 'explorerMove', entries: results });
+                this.toast(`Moved ${moved} item${moved > 1 ? 's' : ''} to ${entry.name} — Ctrl+Z to undo`, 'success');
+                this.renderPinnedFolders();
+                this.refreshExplorer();
+              }
+            } catch (err) { this.toast('Move failed', 'error'); }
+            return;
+          }
+          // 2. Clip card drop
           const clipId = e.dataTransfer.getData('text/plain');
           if (clipId && this._internalDrag) {
-            await ucb.copyClipToPath(clipId, entry.path);
-            this.toast(`Copied to ${entry.name}`, 'success');
-            this.navigateExplorer(this.explorerPath);
+            if (clipId.startsWith('fs_')) {
+              const filePath = clipId.substring(3);
+              const results = await ucb.copyFilesToDir([filePath], entry.path);
+              const copied = results.filter(r => r.success).length;
+              if (copied > 0) {
+                this.pushUndo({ type: 'explorerCopy', entries: results });
+                this.toast(`Copied to ${entry.name} — Ctrl+Z to undo`, 'success');
+                this.renderPinnedFolders();
+                this.refreshExplorer();
+                await this._refreshActiveFolderTab();
+              }
+            } else {
+              const ok = await ucb.copyClipToPath(clipId, entry.path);
+              if (ok) {
+                this.toast(`Copied to ${entry.name}`, 'success');
+              } else {
+                this.toast('Could not copy clip — file may be missing', 'error');
+              }
+              this.refreshExplorer();
+            }
+            return;
+          }
+          // 3. External file drop from OS
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const srcPaths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean);
+            if (srcPaths.length > 0) {
+              const results = await ucb.copyFilesToDir(srcPaths, entry.path);
+              const copied = results.filter(r => r.success).length;
+              if (copied > 0) {
+                this.pushUndo({ type: 'explorerCopy', entries: results });
+                this.toast(`Copied ${copied} file${copied > 1 ? 's' : ''} to ${entry.name} — Ctrl+Z to undo`, 'success');
+                this.renderPinnedFolders();
+                this.refreshExplorer();
+              }
+            }
           }
         });
       }
@@ -1990,12 +2848,126 @@ const App = {
       container.appendChild(item);
     });
 
+    // Lazy-load explorer image thumbnails with IntersectionObserver to prevent black-screen on large folders
+    if (showThumbs) {
+      if (this._explorerImgObserver) this._explorerImgObserver.disconnect();
+      this._explorerImgObserver = new IntersectionObserver((entries, obs) => {
+        for (const ioEntry of entries) {
+          if (ioEntry.isIntersecting) {
+            const el = ioEntry.target;
+            const src = el.dataset.lazySrc;
+            if (src) {
+              const placeholder = el.querySelector('.explorer-img-placeholder');
+              if (placeholder) {
+                const img = document.createElement('img');
+                img.src = src;
+                img.loading = 'lazy';
+                img.onerror = () => { img.style.display = 'none'; };
+                placeholder.replaceWith(img);
+              }
+              delete el.dataset.lazySrc;
+            }
+            obs.unobserve(el);
+          }
+        }
+      }, { root: container.closest('.explorer-panel') || container.parentElement, rootMargin: '200px' });
+      container.querySelectorAll('.file-item[data-lazy-src]').forEach(item => {
+        this._explorerImgObserver.observe(item);
+      });
+    }
+
+    // Drop on empty area of explorer = drop into current directory
+    const onContainerDragover = (e) => {
+      // Accept internal drags (clips, explorer files), external files
+      if (this._internalDrag || e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/x-explorer-paths') || e.dataTransfer.types.includes('text/plain')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        container.classList.add('explorer-drop-target');
+      }
+    };
+    const onContainerDragleave = (e) => {
+      if (e.target === container || !container.contains(e.relatedTarget)) {
+        container.classList.remove('explorer-drop-target');
+      }
+    };
+    const onContainerDrop = async (e) => {
+      container.classList.remove('explorer-drop-target');
+      if (!this.explorerPath) return;
+      // Internal explorer move to current folder
+      const explorerPaths = e.dataTransfer.getData('text/x-explorer-paths');
+      if (explorerPaths && this._internalDrag) {
+        e.preventDefault();
+        try {
+          const paths = JSON.parse(explorerPaths);
+          // Skip move if all dragged files are already in the current directory
+          const currentDirNorm = this.explorerPath.replace(/\\/g, '/');
+          const allAlreadyHere = paths.every(p => {
+            const parent = p.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+            return parent === currentDirNorm;
+          });
+          if (allAlreadyHere) return;
+          const results = await ucb.moveFilesToDir(paths, this.explorerPath);
+          const moved = results.filter(r => r.success).length;
+          if (moved > 0) { this.pushUndo({ type: 'explorerMove', entries: results }); this.toast(`Moved ${moved} item${moved > 1 ? 's' : ''} — Ctrl+Z to undo`, 'success'); this.renderPinnedFolders(); this.refreshExplorer(); }
+        } catch {}
+        return;
+      }
+      // Clip drop into current folder
+      const clipId = e.dataTransfer.getData('text/plain');
+      if (clipId && this._internalDrag) {
+        e.preventDefault();
+        if (clipId.startsWith('fs_')) {
+          const filePath = clipId.substring(3);
+          const results = await ucb.copyFilesToDir([filePath], this.explorerPath);
+          const copied = results.filter(r => r.success).length;
+          if (copied > 0) {
+            this.pushUndo({ type: 'explorerCopy', entries: results });
+            this.toast(`Copied to folder — Ctrl+Z to undo`, 'success');
+            this.renderPinnedFolders();
+            this.refreshExplorer();
+            await this._refreshActiveFolderTab();
+          }
+        } else {
+          const ok = await ucb.copyClipToPath(clipId, this.explorerPath);
+          if (ok) {
+            this.toast('Copied clip to folder', 'success');
+          } else {
+            this.toast('Could not copy clip — file may be missing', 'error');
+          }
+          this.refreshExplorer();
+        }
+        return;
+      }
+      // External file drop into current folder
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        e.preventDefault();
+        const srcPaths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean);
+        if (srcPaths.length > 0) {
+          const results = await ucb.copyFilesToDir(srcPaths, this.explorerPath);
+          const copied = results.filter(r => r.success).length;
+          if (copied > 0) { this.pushUndo({ type: 'explorerCopy', entries: results }); this.toast(`Copied ${copied} file${copied > 1 ? 's' : ''} — Ctrl+Z to undo`, 'success'); this.renderPinnedFolders(); this.refreshExplorer(); }
+        }
+      }
+    };
+
     // Click empty area to deselect
-    container.addEventListener('click', (e) => {
+    const onContainerClick = (e) => {
       if (e.target === container) {
         this._explorerClearSelection();
       }
-    });
+    };
+
+    container.addEventListener('dragover', onContainerDragover);
+    container.addEventListener('dragleave', onContainerDragleave);
+    container.addEventListener('drop', onContainerDrop);
+    container.addEventListener('click', onContainerClick);
+    // Store cleanup for next render
+    this._explorerContainerCleanup = () => {
+      container.removeEventListener('dragover', onContainerDragover);
+      container.removeEventListener('dragleave', onContainerDragleave);
+      container.removeEventListener('drop', onContainerDrop);
+      container.removeEventListener('click', onContainerClick);
+    };
 
     // Rubber-band (drag-to-select) on empty area
     this._bindExplorerRubberBand(container, sorted);
@@ -2009,6 +2981,45 @@ const App = {
     this._explorerLastClickIdx = idx;
     this._explorerUpdateSelectionUI();
   },
+
+  /** Scroll to and briefly highlight a file in the explorer sidebar */
+  _highlightExplorerItem(filePath) {
+    const normPath = filePath.replace(/\\/g, '/');
+    const container = document.getElementById('explorerFileList');
+    const items = container.querySelectorAll('.file-item');
+    for (const item of items) {
+      const itemPath = (item.dataset.path || '').replace(/\\/g, '/');
+      if (itemPath === normPath) {
+        item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        item.classList.add('browse-highlight');
+        setTimeout(() => item.classList.remove('browse-highlight'), 2000);
+        // Also select it
+        const idx = parseInt(item.dataset.idx, 10);
+        if (!isNaN(idx)) this._explorerSelectSingle(idx);
+        return;
+      }
+    }
+  },
+
+  /** Scroll to and briefly highlight a clip card in the library grid */
+  _highlightLibraryClip(filePath) {
+    const normPath = filePath.replace(/\\/g, '/');
+    const grid = document.getElementById('clipGrid');
+    if (!grid) return;
+    const cards = grid.querySelectorAll('.clip-card');
+    for (const card of cards) {
+      const clipId = card.dataset.clipId || '';
+      // Virtual filesystem clips have IDs like 'fs_<path>'
+      const cardPath = clipId.startsWith('fs_') ? clipId.substring(3).replace(/\\/g, '/') : '';
+      if (cardPath === normPath) {
+        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        card.classList.add('browse-highlight');
+        setTimeout(() => card.classList.remove('browse-highlight'), 2000);
+        return;
+      }
+    }
+  },
+
   _explorerToggleSelect(idx) {
     const entry = this._explorerSortedEntries[idx];
     if (!entry) return;
@@ -2111,13 +3122,22 @@ const App = {
 
     let items = `<button class="context-menu-item" data-action="open-explorer">View in File Explorer</button>`;
     if (isDirectory || isPinned) {
-      const alreadyPinned = this.folders.some(f => f.path && f.path.replace(/\\/g, '/') === (filePath || '').replace(/\\/g, '/'));
+      const alreadyPinned = this.folders.some(f => f.pinned && f.path && f.path.replace(/\\/g, '/') === (filePath || '').replace(/\\/g, '/'));
       if (!alreadyPinned) {
         items += `<button class="context-menu-item" data-action="add-pin">Add to Pins</button>`;
       }
       items += `<button class="context-menu-item" data-action="open-in-library">Open in Library</button>`;
     }
     items += `<button class="context-menu-item" data-action="copy-path">Copy Path</button>`;
+    items += `<div class="context-menu-separator"></div>`;
+    items += `<button class="context-menu-item" data-action="rename">Rename</button>`;
+    // Multi-selected delete
+    const selCount = (this._explorerSelectedPaths || new Set()).size;
+    if (selCount > 1) {
+      items += `<button class="context-menu-item danger" data-action="delete-selected">Delete ${selCount} Items</button>`;
+    } else {
+      items += `<button class="context-menu-item danger" data-action="delete">Delete</button>`;
+    }
     menu.innerHTML = items;
 
     menu.addEventListener('click', async (ev) => {
@@ -2126,22 +3146,104 @@ const App = {
       if (action === 'open-explorer') ucb.openInExplorer(filePath);
       else if (action === 'add-pin') {
         const folderName = name || filePath.replace(/\\/g, '/').split('/').pop();
-        await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: filePath });
+        // Re-pin existing unpinned folder record if it exists, otherwise create new
+        const existingFolder = this.folders.find(f => f.path && f.path.replace(/\\/g, '/') === (filePath || '').replace(/\\/g, '/'));
+        if (existingFolder) {
+          await ucb.pinFolder(existingFolder.id, true);
+        } else {
+          await ucb.createFolder({ name: folderName, color: randomFolderColor(), pinned: true, path: filePath });
+        }
         this.folders = await ucb.getFolders();
         this.renderPinnedFolders();
         this.renderQuickAccess();
+        this.renderLeftSidebar();
+        this.refreshExplorer();
         this.toast(`Pinned "${folderName}"`, 'success');
       } else if (action === 'open-in-library') {
         this.openFolderInLibrary(filePath, name);
       } else if (action === 'copy-path') {
         navigator.clipboard.writeText(filePath);
         this.toast('Path copied', 'success');
+      } else if (action === 'rename') {
+        this._explorerInlineRename(filePath, name);
+      } else if (action === 'delete') {
+        const results = await ucb.deleteFiles([filePath]);
+        if (results[0]?.success) {
+          this.toast(`Moved "${name}" to Recycle Bin`, 'success');
+          this.renderPinnedFolders();
+          this.refreshExplorer();
+        } else {
+          this.toast('Delete failed: ' + (results[0]?.error || 'Unknown error'), 'error');
+        }
+      } else if (action === 'delete-selected') {
+        const paths = [...(this._explorerSelectedPaths || [])];
+        if (paths.length === 0) return;
+        const results = await ucb.deleteFiles(paths);
+        const deleted = results.filter(r => r.success).length;
+        if (deleted > 0) {
+          this.toast(`Moved ${deleted} item${deleted > 1 ? 's' : ''} to Recycle Bin`, 'success');
+          this.renderPinnedFolders();
+          this.refreshExplorer();
+        }
       }
       this.dismissContextMenu();
     });
 
     document.body.appendChild(menu);
     this.contextMenu = menu;
+    // Clamp menu to viewport
+    requestAnimationFrame(() => {
+      const r = menu.getBoundingClientRect();
+      if (r.right > window.innerWidth) menu.style.left = (window.innerWidth - r.width - 8) + 'px';
+      if (r.bottom > window.innerHeight) menu.style.top = (window.innerHeight - r.height - 8) + 'px';
+    });
+  },
+
+  // Inline rename for explorer file items
+  _explorerInlineRename(filePath, currentName) {
+    const container = document.getElementById('explorerFileList');
+    const items = container.querySelectorAll('.file-item');
+    let targetItem = null;
+    for (const item of items) {
+      if (item.dataset.path === filePath) { targetItem = item; break; }
+    }
+    if (!targetItem) return;
+    const nameEl = targetItem.querySelector('.file-item-name');
+    if (!nameEl) return;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.style.cssText = 'width:100%;font-size:inherit;background:var(--bg-elevated);border:1px solid var(--accent-green);color:var(--text-primary);padding:1px 4px;border-radius:3px;outline:none;font-family:inherit;box-sizing:border-box';
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    input.focus();
+    // Select name without extension
+    const dotIdx = currentName.lastIndexOf('.');
+    input.setSelectionRange(0, dotIdx > 0 ? dotIdx : currentName.length);
+
+    const commit = async () => {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) {
+        nameEl.textContent = this.escapeHtml(this.midTruncate(currentName, 28));
+        return;
+      }
+      const result = await ucb.renameFile(filePath, newName);
+      if (result.success) {
+        this.toast(`Renamed to "${newName}"`, 'success');
+        this.refreshExplorer();
+      } else {
+        this.toast('Rename failed: ' + (result.error || 'Unknown error'), 'error');
+        nameEl.textContent = this.escapeHtml(this.midTruncate(currentName, 28));
+      }
+    };
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); nameEl.textContent = this.escapeHtml(this.midTruncate(currentName, 28)); }
+      e.stopPropagation(); // Prevent keyboard handler from catching these
+    });
   },
 
   // ===== Actions =====
@@ -2287,10 +3389,23 @@ const App = {
 
   async deleteActiveClip() {
     if (!this.activeClip) return;
-    const clipData = await ucb.softDeleteClip(this.activeClip.id);
-    this.clips = this.clips.filter(c => c.id !== this.activeClip.id);
-    this.allClips = this.allClips.filter(c => c.id !== this.activeClip.id);
-    this.closeTab(this.activeClip.id);
+    const clip = this.activeClip;
+    // Virtual filesystem clip — delete from filesystem
+    if (clip._isVirtual && clip.filePath) {
+      await ucb.deleteFiles([clip.filePath]);
+      this.clips = this.clips.filter(c => c.id !== clip.id);
+      this.closeTab(clip.id);
+      this.closeEditor();
+      this.renderClipGrid();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+      this.toast('File moved to Recycle Bin', 'info');
+      return;
+    }
+    const clipData = await ucb.softDeleteClip(clip.id);
+    this.clips = this.clips.filter(c => c.id !== clip.id);
+    this.allClips = this.allClips.filter(c => c.id !== clip.id);
+    this.closeTab(clip.id);
     this.closeEditor();
     this.renderClipGrid();
     this.renderLeftSidebar();
@@ -2362,6 +3477,7 @@ const App = {
     if (this.undoStack.length === 0) return;
     const action = this.undoStack.pop();
     this.redoStack.push(action);
+    try {
     if (action.type === 'favorite') {
       await ucb.updateClip(action.clipId, { favorite: action.oldVal });
       const c = this.clips.find(x => x.id === action.clipId);
@@ -2409,11 +3525,37 @@ const App = {
       await this.loadData();
       this.renderPinnedFolders();
       this.refreshExplorer();
+    } else if (action.type === 'explorerMove') {
+      // Undo move: move each file back to its original parent directory
+      for (const entry of action.entries.filter(e => e.success)) {
+        const origDir = entry.src.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        await ucb.moveFilesToDir([entry.dest], origDir);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'explorerCopy') {
+      // Undo copy: delete the copied files
+      const destPaths = action.entries.filter(e => e.success).map(e => e.dest);
+      await ucb.deleteFiles(destPaths);
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'pin') {
+      // Undo pin/unpin: revert to previous state
+      await ucb.pinFolder(action.folderId, action.wasPinned);
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.renderQuickAccess();
+      this.renderLeftSidebar();
+      this.renderLibraryTabs();
+      this.refreshExplorer();
     }
+    } catch (e) { console.error('Undo failed:', e); this.toast('Undo failed', 'error'); }
     this.renderClipGrid();
     this.renderLeftSidebar();
     this.renderLibraryTabs();
-    this.toast('Undone', 'info');
+    this.toast(`Undo: ${this._describeAction(action)}`, 'info');
   },
 
   async performRedo() {
@@ -2463,11 +3605,42 @@ const App = {
       this.allClips = this.allClips.filter(c => !ids.has(c.id));
       this.renderPinnedFolders();
       this.refreshExplorer();
+    } else if (action.type === 'explorerMove') {
+      // Redo move: move files back to the destination directory
+      const firstDest = action.entries.find(e => e.success);
+      if (firstDest) {
+        const destDir = firstDest.dest.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        const srcPaths = action.entries.filter(e => e.success).map(e => e.src);
+        await ucb.moveFilesToDir(srcPaths, destDir);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'explorerCopy') {
+      // Redo copy: copy files again to the destination directory
+      const firstDest = action.entries.find(e => e.success);
+      if (firstDest) {
+        const destDir = firstDest.dest.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        const srcPaths = action.entries.filter(e => e.success).map(e => e.src);
+        await ucb.copyFilesToDir(srcPaths, destDir);
+      }
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.refreshExplorer();
+    } else if (action.type === 'pin') {
+      // Redo pin/unpin: apply the new state again
+      await ucb.pinFolder(action.folderId, !action.wasPinned);
+      await this.loadData();
+      this.renderPinnedFolders();
+      this.renderQuickAccess();
+      this.renderLeftSidebar();
+      this.renderLibraryTabs();
+      this.refreshExplorer();
     }
     this.renderClipGrid();
     this.renderLeftSidebar();
     this.renderLibraryTabs();
-    this.toast('Redone', 'info');
+    this.toast(`Redo: ${this._describeAction(action)}`, 'info');
   },
 
   async autoOcrIfEnabled(clip) {
@@ -2587,16 +3760,36 @@ const App = {
 
   handleLibrarySearch(query) {
     if (!query.trim()) {
-      this.clips = [...this.allClips];
+      // Restore the current filter/tab view instead of showing everything
+      this._reapplyCurrentFilter();
     } else {
+      // Search within the current base set (respect active tab filter)
+      const baseClips = this._getBaseClipsForCurrentView();
       const q = query.toLowerCase();
-      this.clips = this.allClips.filter(c =>
+      this.clips = baseClips.filter(c =>
         (c.title || '').toLowerCase().includes(q) ||
         (c.content || '').toLowerCase().includes(q) ||
         (c.extractedText || '').toLowerCase().includes(q)
       );
     }
     this.renderClipGrid();
+  },
+
+  // Returns the unfiltered clip set for the currently active library tab/view
+  _getBaseClipsForCurrentView() {
+    const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTabId);
+    if (!activeTab || activeTab.id === 'all') return [...this.allClips];
+    const label = activeTab.label;
+    const typeMap = { 'Images': 'image', 'Text': 'text', 'Links': 'link', 'Code': 'code' };
+    if (label === 'Favorites') return this.allClips.filter(c => c.favorite);
+    if (typeMap[label]) return this.allClips.filter(c => c.type === typeMap[label]);
+    if (label === 'Other') return this.allClips.filter(c => !['image','text','link','code'].includes(c.type));
+    if (activeTab.folderPath) {
+      const folder = this.folders.find(f => f.path === activeTab.folderPath);
+      if (folder) return this.allClips.filter(c => c.folderId === folder.id);
+      return [];
+    }
+    return [...this.allClips];
   },
 
   handleExplorerSearch(query) {
@@ -2761,6 +3954,8 @@ const App = {
         <h3>Display</h3>
         <div class="setting-row"><label>UI Scale</label><div style="display:flex;gap:8px;align-items:center"><input type="range" id="settUiScale" min="60" max="150" step="5" value="${Math.round((parseInt(settings.uiScale)||100)/5)*5}" class="modern-slider" style="width:120px" /><span id="settUiScaleLabel" style="font-size:11px;color:var(--text-secondary);min-width:36px">${Math.round((parseInt(settings.uiScale)||100)/5)*5}%</span></div></div>
         <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Ctrl+= to zoom in, Ctrl+- to zoom out, Ctrl+0 to reset.</p>
+        <div class="setting-row"><label>Fit image thumbnails</label><label class="toggle"><input type="checkbox" id="settFitThumbs" ${settings.fitThumbnails === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">When enabled, image thumbnails keep their aspect ratio instead of being enlarged to fill the thumbnail area.</p>
       </div>
       <div class="settings-section">
         <h3>General</h3>
@@ -2775,7 +3970,7 @@ const App = {
       <div class="settings-section">
         <h3>Clipboard Capture</h3>
         <div class="setting-row"><label>Save text clips</label><label class="toggle"><input type="checkbox" id="settSaveText" ${settings.saveTextClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
-        <div class="setting-row" id="rowNotifyText" style="padding-left:16px"><label>Notify on text clip</label><label class="toggle"><input type="checkbox" id="settNotifyText" ${settings.notifyTextClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
+        <div class="setting-row" id="rowNotifyText" style="padding-left:16px"><label>Notify on text clip</label><label class="toggle"><input type="checkbox" id="settNotifyText" ${settings.notifyTextClips === 'true' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row"><label>Save image clips</label><label class="toggle"><input type="checkbox" id="settSaveImage" ${settings.saveImageClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <div class="setting-row" id="rowNotifyImage" style="padding-left:16px"><label>Notify on image clip</label><label class="toggle"><input type="checkbox" id="settNotifyImage" ${settings.notifyImageClips !== 'false' ? 'checked' : ''} /><span class="toggle-slider"></span></label></div>
         <p style="font-size:10px;color:var(--text-muted);margin:-4px 0 8px 0">Notification options are only available when the parent save option is enabled.</p>
@@ -2831,7 +4026,6 @@ const App = {
           <p style="font-size:10px;color:var(--text-muted);margin-top:4px">Sets the AI provider to None. To uninstall Ollama from your system, use Windows Settings &gt; Apps.</p>
         </div>
       </div>
-      <div class="btn-row"><button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button></div>
     `;
 
     // UI Scale slider — preview label on input, apply only on mouseup
@@ -2841,6 +4035,7 @@ const App = {
     });
     scaleSlider.addEventListener('change', () => {
       this._setZoom(parseInt(scaleSlider.value), true);
+      this._autoSaveSettings();
     });
 
     // Dependent save/notify toggles for clipboard capture
@@ -2870,6 +4065,7 @@ const App = {
         const targetId = btn.dataset.target;
         const el = document.getElementById(targetId);
         if (el) { el.value = ''; el.dataset.accelerator = ''; }
+        this._autoSaveSettings();
       });
     });
     document.getElementById('resetHotkeysBtn').addEventListener('click', async () => {
@@ -2881,6 +4077,7 @@ const App = {
         el.dataset.accelerator = defs[key] || '';
       });
       this.toast('Hotkeys reset to defaults', 'info');
+      this._autoSaveSettings();
     });
 
     document.getElementById('settHiddenFolder').addEventListener('change', (e) => {
@@ -2900,7 +4097,10 @@ const App = {
     if (aiSettings.provider === 'ollama') this._checkOllamaStatus();
     document.getElementById('changeDataDirBtn').addEventListener('click', async () => {
       const d = await ucb.chooseDirectory();
-      if (d) document.getElementById('settDataDir').value = d;
+      if (d) {
+        document.getElementById('settDataDir').value = d;
+        this._autoSaveSettings();
+      }
     });
     document.getElementById('cleanupHistoryBtn').addEventListener('click', async () => {
       const days = parseInt(document.getElementById('settHistoryDays').value) || 30;
@@ -2926,36 +4126,22 @@ const App = {
         this.toast('Error moving clips folder', 'error');
       }
     });
-    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
-      await ucb.saveSettings({
-        clipboardMonitoring: document.getElementById('settClipMonitor').checked?'true':'false',
-        openOnStartup: document.getElementById('settOpenOnStartup').checked?'true':'false',
-        minimizeToTray: document.getElementById('settMinToTray').checked?'true':'false',
-        autoOcr: document.getElementById('settAutoOcr').checked?'true':'false',
-        saveTextClips: document.getElementById('settSaveText').checked?'true':'false',
-        notifyTextClips: document.getElementById('settNotifyText').checked?'true':'false',
-        saveImageClips: document.getElementById('settSaveImage').checked?'true':'false',
-        notifyImageClips: document.getElementById('settNotifyImage').checked?'true':'false',
-        dataDirectory: document.getElementById('settDataDir').value,
-        historyCleanupDays: document.getElementById('settHistoryDays').value,
-        uiScale: document.getElementById('settUiScale').value,
-        hotkeyToggleApp: document.getElementById('settHotkeyToggleApp').dataset.accelerator || '',
-        hotkeyScreenshot: document.getElementById('settHotkeyScreenshot').dataset.accelerator || '',
-        hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || '',
-        interceptScreenshots: document.getElementById('settInterceptScreenshots').checked?'true':'false',
-        experimentalHiddenFolder: document.getElementById('settHiddenFolder').checked?'true':'false'
-      });
-      // Auto-cleanup history based on setting
-      const cleanupDays = parseInt(document.getElementById('settHistoryDays').value);
-      if (cleanupDays > 0) await ucb.cleanupOldHistory(cleanupDays);
-      await ucb.saveAISettings({
-        provider: document.getElementById('settAIProvider').value,
-        apiKey: document.getElementById('settAIKey').value,
-        model: document.getElementById('settAIModel').value,
-        endpoint: document.getElementById('settAIEndpoint').value
-      });
-      this.toast('Settings saved', 'success');
+    // Auto-save: wire change events on all settings controls
+    const autoSave = () => this._autoSaveSettings();
+    ['settClipMonitor','settOpenOnStartup','settMinToTray','settAutoOcr','settInterceptScreenshots',
+     'settSaveText','settNotifyText','settSaveImage','settNotifyImage','settHiddenFolder','settShowFileExt','settFitThumbs'
+    ].forEach(id => document.getElementById(id)?.addEventListener('change', autoSave));
+    // When fit thumbnails toggle changes, apply immediately
+    document.getElementById('settFitThumbs')?.addEventListener('change', (e) => {
+      this._fitThumbnails = e.target.checked;
+      document.body.classList.toggle('fit-thumbnails', this._fitThumbnails);
     });
+    document.getElementById('settHistoryDays')?.addEventListener('change', autoSave);
+    document.getElementById('settAIProvider')?.addEventListener('change', autoSave);
+    // Debounced auto-save for text inputs (AI key, model, endpoint)
+    let _aiTextTimer = null;
+    const debouncedAISave = () => { clearTimeout(_aiTextTimer); _aiTextTimer = setTimeout(autoSave, 600); };
+    ['settAIKey','settAIModel','settAIEndpoint'].forEach(id => document.getElementById(id)?.addEventListener('input', debouncedAISave));
     document.getElementById('resetAIBtn').addEventListener('click', async () => {
       document.getElementById('settAIProvider').value = 'none';
       document.getElementById('settAIKey').value = '';
@@ -2966,6 +4152,34 @@ const App = {
       document.getElementById('aiKeyGroup').style.display = 'none';
       document.getElementById('aiEndpointGroup').style.display = 'none';
       this.toast('AI features disabled', 'info');
+    });
+  },
+
+  async _autoSaveSettings() {
+    await ucb.saveSettings({
+      clipboardMonitoring: document.getElementById('settClipMonitor').checked?'true':'false',
+      openOnStartup: document.getElementById('settOpenOnStartup').checked?'true':'false',
+      minimizeToTray: document.getElementById('settMinToTray').checked?'true':'false',
+      autoOcr: document.getElementById('settAutoOcr').checked?'true':'false',
+      saveTextClips: document.getElementById('settSaveText').checked?'true':'false',
+      notifyTextClips: document.getElementById('settNotifyText').checked?'true':'false',
+      saveImageClips: document.getElementById('settSaveImage').checked?'true':'false',
+      notifyImageClips: document.getElementById('settNotifyImage').checked?'true':'false',
+      dataDirectory: document.getElementById('settDataDir').value,
+      historyCleanupDays: document.getElementById('settHistoryDays').value,
+      uiScale: document.getElementById('settUiScale').value,
+      hotkeyToggleApp: document.getElementById('settHotkeyToggleApp').dataset.accelerator || '',
+      hotkeyScreenshot: document.getElementById('settHotkeyScreenshot').dataset.accelerator || '',
+      hotkeyScreenshotSelection: document.getElementById('settHotkeyScreenshotSelection').dataset.accelerator || '',
+      interceptScreenshots: document.getElementById('settInterceptScreenshots').checked?'true':'false',
+      experimentalHiddenFolder: document.getElementById('settHiddenFolder').checked?'true':'false',
+      fitThumbnails: document.getElementById('settFitThumbs')?.checked?'true':'false'
+    });
+    await ucb.saveAISettings({
+      provider: document.getElementById('settAIProvider').value,
+      apiKey: document.getElementById('settAIKey')?.value || '',
+      model: document.getElementById('settAIModel')?.value || '',
+      endpoint: document.getElementById('settAIEndpoint')?.value || ''
     });
   },
 
@@ -2981,8 +4195,8 @@ const App = {
     const el = document.getElementById(id);
     if (!el) return;
     // Mark as actively setting a keybind so handleKeyboard ignores keys
-    el.addEventListener('focus', () => { el.style.outline = '2px solid var(--accent-green)'; this._settingKeybind = true; });
-    el.addEventListener('blur', () => { el.style.outline = ''; this._settingKeybind = false; });
+    el.addEventListener('focus', () => { el.style.outline = '2px solid var(--accent-green)'; this._settingKeybind = true; ucb.suspendShortcuts(); });
+    el.addEventListener('blur', () => { el.style.outline = ''; this._settingKeybind = false; ucb.resumeShortcuts(); });
     el.addEventListener('keydown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2992,6 +4206,7 @@ const App = {
         el.value = '';
         el.dataset.accelerator = '';
         el.blur();
+        this._autoSaveSettings();
         return;
       }
       // Backspace clears the keybind
@@ -2999,6 +4214,7 @@ const App = {
         el.value = '';
         el.dataset.accelerator = '';
         el.blur();
+        this._autoSaveSettings();
         return;
       }
       // Ignore lone modifier keys
@@ -3018,6 +4234,7 @@ const App = {
       el.dataset.accelerator = accelerator;
       el.value = this._hotkeyDisplay(accelerator);
       el.blur();
+      this._autoSaveSettings();
     });
   },
 
@@ -3033,16 +4250,40 @@ const App = {
       { label: 'Edit', action: () => this.openEditor(clip) },
       { label: 'Copy to Clipboard', action: () => { this._ignoreClipboard = true; ucb.copyToClipboard(clip.id); this.toast('Copied', 'success'); setTimeout(() => { this._ignoreClipboard = false; }, 2000); } },
       { label: 'Save As...', action: () => ucb.saveClipAs(clip.id) },
+      { label: 'Open in File Explorer', action: () => { if (clip.filePath) ucb.openInExplorer(clip.filePath); else this.toast('No file path available', 'info'); } },
+      { label: 'Browse in Sidebar', action: () => {
+        if (clip.filePath) {
+          const parentDir = clip.filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+          if (parentDir) this.navigateExplorer(parentDir, clip.filePath);
+        } else { this.toast('No file path available', 'info'); }
+      }},
+      { label: 'Browse in Library', action: () => {
+        if (clip.filePath) {
+          const parentDir = clip.filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+          const folderName = parentDir.split('/').pop() || 'Folder';
+          if (parentDir) this.openFolderInLibrary(parentDir, folderName, clip.filePath);
+        } else { this.toast('No file path available', 'info'); }
+      }},
       { label: clip.favorite ? 'Unfavorite' : 'Favorite', action: () => this.toggleFavoriteById(clip.id) },
       'separator',
-      { label: 'Move to Folder', action: () => Dialogs.showMoveFolderDialog(clip, this.folders) },
+      { label: 'Move to Folder', action: () => Dialogs.showMoveFolderDialog(clip, this.folders.filter(f => f.pinned)) },
       { label: 'Move to Hidden', action: () => Dialogs.showMoveToHiddenDialog(clip) },
       { label: 'QR Code', action: () => { this.activeClip = clip; this.showQrCode(); } },
       { label: 'Generate Link', action: () => { this.activeClip = clip; this.generateShareLink(); } },
       'separator',
       { label: 'Delete', danger: true, action: async () => {
-        await ucb.deleteClip(clip.id); this.allClips = this.allClips.filter(c => c.id !== clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
-        this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer(); this.toast('Clip moved to Recycle Bin', 'info');
+        if (clip._isVirtual && clip.filePath) {
+          await ucb.deleteFiles([clip.filePath]);
+          this.clips = this.clips.filter(c => c.id !== clip.id);
+          this.closeTab(clip.id); this.renderClipGrid(); this.renderPinnedFolders(); this.refreshExplorer();
+          this.toast('File moved to Recycle Bin', 'info');
+        } else {
+          const clipData = await ucb.softDeleteClip(clip.id);
+          if (clipData) { this.pushUndo({ type: 'delete', clipData, filePath: clipData.filePath }); }
+          this.allClips = this.allClips.filter(c => c.id !== clip.id); this.clips = this.clips.filter(c => c.id !== clip.id);
+          this.closeTab(clip.id); this.renderClipGrid(); this.renderLeftSidebar(); this.renderPinnedFolders(); this.renderLibraryTabs(); this.refreshExplorer();
+          this.toastWithUndo('Clip deleted');
+        }
       }}
     ];
 
@@ -3064,6 +4305,106 @@ const App = {
     });
   },
 
+  showLibraryTabContextMenu(e, tab) {
+    this.dismissContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    const items = [];
+    // Folder-specific actions
+    if (tab.folderPath) {
+      const folder = this.folders.find(f => f.path === tab.folderPath);
+      items.push(
+        { label: 'Open in File Explorer', action: () => { ucb.openInExplorer(tab.folderPath); }},
+        { label: 'Browse in Sidebar', action: () => { this.navigateExplorer(tab.folderPath); }},
+        { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.folderPath); this.toast('Path copied', 'success'); }},
+      );
+      if (folder) {
+        items.push({ label: folder.pinned ? 'Unpin Folder' : 'Pin Folder', action: async () => { const wasPinned = folder.pinned; await ucb.pinFolder(folder.id, !wasPinned); this.pushUndo({ type: 'pin', folderId: folder.id, wasPinned, folderName: folder.name }); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.renderLeftSidebar(); this.renderLibraryTabs(); this.refreshExplorer(); }});
+      }
+      items.push({ separator: true });
+    }
+    // Tab management
+    items.push({ label: 'Close Tab', action: () => { this.closeLibraryTab(tab.id); }});
+    // Close tabs to the right
+    const idx = this.libraryTabs.findIndex(t => t.id === tab.id);
+    const tabsToRight = this.libraryTabs.slice(idx + 1).filter(t => t.id !== 'all');
+    if (tabsToRight.length > 0) {
+      items.push({ label: `Close Tabs to Right (${tabsToRight.length})`, action: () => {
+        for (const t of tabsToRight) this.libraryTabs = this.libraryTabs.filter(lt => lt.id !== t.id);
+        if (!this.libraryTabs.find(t => t.id === this.activeLibTab)) { this.activeLibTab = 'all'; this.showAllClips(); }
+        this.renderLibraryTabs();
+      }});
+    }
+    // Close all other tabs
+    const otherClosable = this.libraryTabs.filter(t => t.id !== 'all' && t.id !== tab.id);
+    if (otherClosable.length > 0) {
+      items.push({ label: `Close Other Tabs (${otherClosable.length})`, action: () => {
+        this.libraryTabs = this.libraryTabs.filter(t => t.id === 'all' || t.id === tab.id);
+        if (!this.libraryTabs.find(t => t.id === this.activeLibTab)) { this.activeLibTab = tab.id; this.switchLibraryTab(tab.id); }
+        this.renderLibraryTabs();
+      }});
+    }
+    items.forEach(item => {
+      if (item.separator) { const sep = document.createElement('div'); sep.className = 'context-menu-separator'; menu.appendChild(sep); return; }
+      const btn = document.createElement('button');
+      btn.className = 'context-menu-item';
+      btn.textContent = item.label;
+      btn.addEventListener('click', () => { this.dismissContextMenu(); item.action(); });
+      menu.appendChild(btn);
+    });
+    // Viewport clamp
+    document.body.appendChild(menu);
+    requestAnimationFrame(() => {
+      const r = menu.getBoundingClientRect();
+      if (r.right > window.innerWidth) menu.style.left = Math.max(0, window.innerWidth - r.width - 4) + 'px';
+      if (r.bottom > window.innerHeight) menu.style.top = Math.max(0, window.innerHeight - r.height - 4) + 'px';
+    });
+    this.contextMenu = menu;
+  },
+
+  async _deletePinnedFolder(folder) {
+    const isExternal = folder.path && !folder.path.replace(/\\/g, '/').startsWith(this.explorerHomePath.replace(/\\/g, '/'));
+    // Confirmation dialog
+    if (isExternal) {
+      const ok = await Dialogs.confirm(
+        'Move external folder to Recycle Bin?',
+        `This is a folder outside the app directory:\n${folder.path}\n\nAll files inside will be moved to the Recycle Bin. This cannot be undone from within the app.`,
+        'Move to Recycle Bin'
+      );
+      if (!ok) return;
+    } else {
+      const ok = await Dialogs.confirm(
+        'Move folder to Recycle Bin?',
+        `"${folder.name}" and all its contents will be moved to the Recycle Bin.`,
+        'Move to Recycle Bin'
+      );
+      if (!ok) return;
+    }
+    // Trash the filesystem folder if it has a path
+    if (folder.path) {
+      try {
+        await ucb.deleteFiles([folder.path]);
+      } catch (e) { console.warn('Failed to trash folder:', e); }
+    }
+    // Remove the DB folder record
+    await ucb.deleteFolder(folder.id);
+    // Close any library tab for this folder (never remove the permanent 'all' tab)
+    this.libraryTabs = this.libraryTabs.filter(t => t.id === 'all' || t.folderPath !== folder.path);
+    if (this.activeLibTab && !this.libraryTabs.find(t => t.id === this.activeLibTab)) {
+      this.activeLibTab = 'all';
+    }
+    // Reload and re-render
+    await this.loadData();
+    this.renderPinnedFolders();
+    this.renderClipGrid();
+    this.renderLeftSidebar();
+    this.renderLibraryTabs();
+    this.refreshExplorer();
+    this.toast(`"${folder.name}" moved to Recycle Bin`, 'info');
+  },
+
   showFolderContextMenu(e, folder) {
     this.dismissContextMenu();
     const menu = document.createElement('div');
@@ -3072,20 +4413,18 @@ const App = {
     menu.style.top = e.clientY + 'px';
 
     const items = [
-      { label: folder.pinned ? 'Unpin' : 'Pin', action: async () => { await ucb.pinFolder(folder.id, !folder.pinned); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); }},
+      { label: folder.pinned ? 'Unpin' : 'Pin', action: async () => { const wasPinned = folder.pinned; await ucb.pinFolder(folder.id, !wasPinned); this.pushUndo({ type: 'pin', folderId: folder.id, wasPinned, folderName: folder.name }); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.renderLeftSidebar(); this.renderLibraryTabs(); this.refreshExplorer(); }},
       { label: 'Edit', action: () => { Dialogs.showEditFolderDialog(folder); }},
       { label: 'Open in File Explorer', action: () => { ucb.openInExplorer(folder.path || this.explorerHomePath); }},
       { label: 'Browse in Sidebar', action: () => { if (folder.path) this.navigateExplorer(folder.path); }},
       { label: 'Browse in Library', action: () => { if (folder.path) this.openFolderInLibrary(folder.path, folder.name); }},
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(folder.path || ''); this.toast('Path copied', 'success'); }},
-      { label: 'Delete Folder', danger: true, action: async () => {
-        const confirmed = await Dialogs.confirm('Delete Folder', `Are you sure you want to delete "${folder.name}"? Clips inside will be unassigned, not deleted.`);
-        if (!confirmed) return;
-        await ucb.deleteFolder(folder.id); await this.loadData(); this.renderPinnedFolders(); this.renderQuickAccess(); this.refreshExplorer(); this.toast('Folder deleted', 'info');
-      }}
+      'separator',
+      { label: 'Move folder to Recycle Bin', danger: true, action: async () => { await this._deletePinnedFolder(folder); }},
     ];
 
     items.forEach(item => {
+      if (item === 'separator') { menu.appendChild(Object.assign(document.createElement('div'), { className: 'context-menu-separator' })); return; }
       const btn = document.createElement('button');
       btn.className = `context-menu-item ${item.danger ? 'danger' : ''}`;
       btn.textContent = item.label;
@@ -3121,6 +4460,14 @@ const App = {
       return;
     }
 
+    // Ctrl+F: focus library search bar
+    if (e.ctrlKey && e.key === 'f') {
+      e.preventDefault();
+      const libSearch = document.getElementById('librarySearchInput');
+      if (libSearch) { libSearch.focus(); libSearch.select(); }
+      return;
+    }
+
     if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
       if (this.editorOpen && this.activeClip?.type === 'image') Editor.undo();
       else { e.preventDefault(); this.performUndo(); }
@@ -3134,8 +4481,29 @@ const App = {
       else { e.preventDefault(); this.performRedo(); }
     }
     if (e.key === 'Delete') {
+      // Explorer file deletion
+      if (this._explorerSelectedPaths && this._explorerSelectedPaths.size > 0) {
+        const paths = [...this._explorerSelectedPaths];
+        ucb.deleteFiles(paths).then(results => {
+          const deleted = results.filter(r => r.success).length;
+          if (deleted > 0) {
+            this.toast(`Moved ${deleted} item${deleted > 1 ? 's' : ''} to Recycle Bin`, 'success');
+            this.renderPinnedFolders();
+            this.refreshExplorer();
+          }
+        });
+        return;
+      }
       if (this.selectMode && this.selectedClips.size > 0) this.bulkDeleteSelected();
       else if (this.activeClip) this.deleteActiveClip();
+    }
+    // F2: rename selected explorer file
+    if (e.key === 'F2' && this._explorerSelectedPaths && this._explorerSelectedPaths.size === 1) {
+      e.preventDefault();
+      const selPath = [...this._explorerSelectedPaths][0];
+      const entry = (this._explorerSortedEntries || []).find(en => en.path === selPath);
+      if (entry) this._explorerInlineRename(entry.path, entry.name);
+      return;
     }
     if (e.ctrlKey && e.key === 's') { e.preventDefault(); if (this.editorOpen && this.activeClip?.type === 'image') Editor.saveEdits(); }
     if (e.ctrlKey && e.key === 'a' && this.selectMode) {
@@ -3148,6 +4516,9 @@ const App = {
       this.renderClipGrid(); this.updateBulkUI();
     }
     if (e.key === 'Escape') {
+      // Close modal dialogs first
+      const modalOverlay = document.getElementById('modalOverlay');
+      if (modalOverlay && !modalOverlay.classList.contains('hidden')) { Dialogs.close(); return; }
       const settingsOverlay = document.getElementById('settingsOverlay');
       if (!settingsOverlay.classList.contains('hidden')) { this.closeSettings(); return; }
       if (this.editorOpen) this.closeEditor();
@@ -3181,6 +4552,26 @@ const App = {
   _hideTabPreview() {
     const existing = document.getElementById('tabPreview');
     if (existing) existing.remove();
+  },
+
+  _describeAction(action) {
+    switch (action.type) {
+      case 'favorite': return action.newVal ? 'Favorited clip' : 'Unfavorited clip';
+      case 'bulkFavorite': return `${action.entries.length} clip(s) ${action.newVal ? 'favorited' : 'unfavorited'}`;
+      case 'move': return `Moved clip to ${action.folderName || 'folder'}`;
+      case 'bulkMove': return `Moved ${action.entries.length} clip(s) to ${action.folderName || 'folder'}`;
+      case 'delete': return 'Deleted clip';
+      case 'bulkDelete': return `Deleted ${action.entries.length} clip(s)`;
+      case 'explorerMove': { const n = action.entries.filter(e => e.success).length; return `Moved ${n} file${n !== 1 ? 's' : ''}`; }
+      case 'explorerCopy': { const n = action.entries.filter(e => e.success).length; return `Copied ${n} file${n !== 1 ? 's' : ''}`; }
+      case 'pin': return action.wasPinned ? `Unpinned ${action.folderName || 'folder'}` : `Pinned ${action.folderName || 'folder'}`;
+      default: return action.type;
+    }
+  },
+
+  _saveTabState() {
+    const ids = this.openTabs.map(t => t.id);
+    ucb.saveSettings({ openTabIds: JSON.stringify(ids), activeTabId: this.activeTabId || '' }).catch(() => {});
   },
 
   _adjustZoom(delta) {
@@ -3228,6 +4619,17 @@ const App = {
 
   midTruncate(str, maxLen = 28) {
     if (!str || str.length <= maxLen) return str;
+    // Always preserve the file extension if present
+    const dotIdx = str.lastIndexOf('.');
+    if (dotIdx > 0 && dotIdx < str.length - 1) {
+      const ext = str.substring(dotIdx); // includes the dot
+      const stem = str.substring(0, dotIdx);
+      const availForStem = maxLen - ext.length - 1; // -1 for ellipsis
+      if (availForStem > 3) {
+        return stem.substring(0, availForStem) + '…' + ext;
+      }
+    }
+    // Fallback for names without extensions or very long extensions
     const endLen = Math.max(8, Math.floor(maxLen * 0.35));
     const startLen = maxLen - endLen - 1;
     return str.substring(0, startLen) + '…' + str.substring(str.length - endLen);

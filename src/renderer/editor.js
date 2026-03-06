@@ -683,12 +683,12 @@ const Editor = {
 
   // ===== History (Undo/Redo) =====
   saveToHistory() {
-    const data = this.canvas.toDataURL('image/png');
+    const data = this.canvas.toDataURL('image/jpeg', 0.5);
     this.drawHistory = this.drawHistory.slice(0, this.historyIndex + 1);
     this.drawHistory.push(data);
     this.historyIndex = this.drawHistory.length - 1;
     // Limit history
-    if (this.drawHistory.length > 50) {
+    if (this.drawHistory.length > 15) {
       this.drawHistory.shift();
       this.historyIndex--;
     }

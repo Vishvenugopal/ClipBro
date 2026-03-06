@@ -85,3 +85,14 @@
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-sm);
 }
+
+/* Library highlight flash (for "Show in Library") */
+@keyframes libraryHighlight {
+  0% { outline: 2px solid var(--accent-green); outline-offset: 2px; box-shadow: 0 0 16px rgba(52,199,89,0.4); }
+  50% { outline: 2px solid var(--accent-green); outline-offset: 2px; box-shadow: 0 0 24px rgba(52,199,89,0.6); }
+  100% { outline: 2px solid transparent; outline-offset: 2px; box-shadow: 0 0 0 transparent; }
+}
+.clip-card.library-highlight {
+  animation: libraryHighlight 2s ease-out;
+  z-index: 5;
+}

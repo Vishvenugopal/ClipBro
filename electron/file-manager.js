@@ -24,6 +24,7 @@ class FileManager {
         else if (textExts.includes(ext)) type = 'text';
 
         // Copy file to clips directory
+        if (!fs.existsSync(this.clipsDir)) fs.mkdirSync(this.clipsDir, { recursive: true });
         const destPath = path.join(this.clipsDir, `${id}${ext}`);
         fs.copyFileSync(filePath, destPath);
 

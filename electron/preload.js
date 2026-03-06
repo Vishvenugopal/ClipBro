@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('ucb', {
   createFolder: (data) => ipcRenderer.invoke('create-folder', data),
   moveClipToFolder: (clipId, folderId) => ipcRenderer.invoke('move-clip-to-folder', clipId, folderId),
   pinFolder: (folderId, pinned) => ipcRenderer.invoke('pin-folder', folderId, pinned),
+  syncFolderFiles: (folderId) => ipcRenderer.invoke('sync-folder-files', folderId),
   updateFolder: (folderId, updates) => ipcRenderer.invoke('update-folder', folderId, updates),
   deleteFolder: (folderId) => ipcRenderer.invoke('delete-folder', folderId),
 
@@ -69,6 +70,7 @@ contextBridge.exposeInMainWorld('ucb', {
 
   // File operations
   importFile: () => ipcRenderer.invoke('import-file'),
+  importFilesFromPaths: (filePaths) => ipcRenderer.invoke('import-files-from-paths', filePaths),
   exportClip: (clipId, destPath) => ipcRenderer.invoke('export-clip', clipId, destPath),
   saveClipAs: (clipId) => ipcRenderer.invoke('save-clip-as', clipId),
 
@@ -86,6 +88,8 @@ contextBridge.exposeInMainWorld('ucb', {
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getHotkeys: () => ipcRenderer.invoke('get-hotkeys'),
   getDefaultHotkeys: () => ipcRenderer.invoke('get-default-hotkeys'),
+  suspendShortcuts: () => ipcRenderer.invoke('suspend-shortcuts'),
+  resumeShortcuts: () => ipcRenderer.invoke('resume-shortcuts'),
 
   // Storage / Clear
   chooseDirectory: () => ipcRenderer.invoke('choose-directory'),
@@ -106,6 +110,12 @@ contextBridge.exposeInMainWorld('ucb', {
   openInExplorer: (filePath) => ipcRenderer.invoke('open-in-explorer', filePath),
   copyClipToPath: (clipId, destDir) => ipcRenderer.invoke('copy-clip-to-path', clipId, destDir),
   readTextFile: (filePath) => ipcRenderer.invoke('read-text-file', filePath),
+  explorerDragStart: (filePaths) => ipcRenderer.send('explorer-drag-start', filePaths),
+  copyFilesToDir: (srcPaths, destDir) => ipcRenderer.invoke('copy-files-to-dir', srcPaths, destDir),
+  moveFilesToDir: (srcPaths, destDir) => ipcRenderer.invoke('move-files-to-dir', srcPaths, destDir),
+  deleteFiles: (filePaths) => ipcRenderer.invoke('delete-files', filePaths),
+  renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', oldPath, newName),
+  createFsDirectory: (parentDir, folderName) => ipcRenderer.invoke('create-fs-directory', parentDir, folderName),
 
   // Filesystem watching
   watchDirectory: (dirPath) => ipcRenderer.invoke('watch-directory', dirPath),
@@ -129,6 +139,9 @@ contextBridge.exposeInMainWorld('ucb', {
   },
   onWindowVisibility: (callback) => {
     ipcRenderer.on('window-visibility', (_, visible) => callback(visible));
+  },
+  onOpenClip: (callback) => {
+    ipcRenderer.on('open-clip', (_, clipId) => callback(clipId));
   },
 
   // Remove listeners

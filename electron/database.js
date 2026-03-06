@@ -31,6 +31,12 @@ class ClipDatabase {
   }
 
   _save() {
+    // Debounce: coalesce rapid writes into a single export
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this._saveNow(), 500);
+  }
+
+  _saveNow() {
     try {
       const data = this.db.export();
       const buffer = Buffer.from(data);
@@ -182,7 +188,8 @@ class ClipDatabase {
 
   // ===== Clips =====
   getClips(filters = {}) {
-    let query = 'SELECT * FROM clips WHERE hidden = 0';
+    // Select lightweight columns for listing — omit metadata, truncate content/extractedText
+    let query = 'SELECT id, type, title, SUBSTR(content, 1, 500) AS content, filePath, thumbnailPath, SUBSTR(extractedText, 1, 300) AS extractedText, folderId, groupId, tags, favorite, hidden, width, height, fileSize, source, createdAt, editedAt, accessedAt FROM clips WHERE hidden = 0';
     const params = [];
 
     if (filters.type) {
@@ -243,14 +250,13 @@ class ClipDatabase {
     return this.getClip(id);
   }
 
-  searchClips(query) {
-    const q = `%${query}%`;
-    return this._all('SELECT * FROM clips WHERE hidden = 0 AND (title LIKE ? OR content LIKE ? OR extractedText LIKE ? OR tags LIKE ?) ORDER BY createdAt DESC', [q, q, q, q]);
-  }
-
   // ===== Folders =====
   getFolders() {
     return this._all('SELECT * FROM folders ORDER BY pinned DESC, sortOrder ASC, createdAt ASC');
+  }
+
+  getFolder(folderId) {
+    return this._get('SELECT * FROM folders WHERE id = ?', [folderId]);
   }
 
   createFolder(data) {
@@ -383,7 +389,8 @@ class ClipDatabase {
   }
 
   close() {
-    if (this.db) { this._save(); this.db.close(); }
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    if (this.db) { this._saveNow(); this.db.close(); }
   }
 }
 

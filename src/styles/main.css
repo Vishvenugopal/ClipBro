@@ -71,6 +71,8 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 }
 .pinned-folder-card:hover { border-color:var(--border-light); background:var(--bg-hover); transform:translateY(-2px); box-shadow:0 4px 16px rgba(0,0,0,0.3); }
 .pinned-folder-card.drag-over { border-color:var(--accent-green); background:rgba(52,199,89,0.08); box-shadow:0 0 20px rgba(52,199,89,0.15); transform:scale(1.04); }
+.pinned-folder-card.external-drop-ready { border-color:rgba(52,199,89,0.3); background:rgba(52,199,89,0.03); box-shadow:0 0 10px rgba(52,199,89,0.08); animation:pulse-border 1.5s ease-in-out infinite; }
+@keyframes pulse-border { 0%,100% { border-color:rgba(52,199,89,0.2); } 50% { border-color:rgba(52,199,89,0.5); } }
 
 /* Folder icon wrapper with papers */
 .pinned-folder-icon-wrap { position:relative; width:64px; height:56px; flex-shrink:0; }
@@ -163,7 +165,7 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .group-item-icon { width:20px; height:20px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0; opacity:0.7; }
 .group-item-name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .group-item-thumbs { display:flex; gap:1px; margin-left:auto; }
-.group-item-thumbs img { width:16px; height:16px; border-radius:2px; object-fit:cover; }
+.group-item-thumbs img { width:16px; height:16px; border-radius:2px; object-fit:cover; border:1px solid var(--border); }
 .group-item-count { font-size:9px; color:var(--text-muted); background:var(--bg-tertiary); padding:1px 5px; border-radius:var(--radius-sm); flex-shrink:0; margin-left:auto; }
 
 /* Sidebar bottom */
@@ -196,7 +198,9 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .tab { display:flex; align-items:center; gap:6px; padding:0 14px; height:32px; background:var(--bg-secondary); border:1px solid var(--border); border-bottom:none; border-radius:8px 8px 0 0; cursor:pointer; color:var(--text-muted); font-size:11px; white-space:nowrap; max-width:200px; transition:background 0.15s, color 0.15s; flex-shrink:0; position:relative; margin:0 1px; margin-bottom:-1px; }
 .tab:hover { background:var(--bg-hover); color:var(--text-primary); }
 .tab.active { background:var(--bg-primary); color:var(--text-primary); border-color:var(--border); z-index:2; height:34px; }
-.tab.tab-selected { outline:2px solid var(--accent-green); outline-offset:-2px; }
+.tab.tab-selected { background:rgba(52,199,89,0.15); border-color:rgba(52,199,89,0.4); }
+.tab.tab-selected:hover { background:rgba(52,199,89,0.22); }
+.tab.active.tab-selected { background:rgba(52,199,89,0.12); border-color:rgba(52,199,89,0.35); }
 .tab-icon { width:14px; height:14px; border-radius:2px; object-fit:cover; flex-shrink:0; }
 .tab-title { overflow:hidden; text-overflow:ellipsis; }
 .tab-close { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:14px; line-height:1; padding:2px 4px; border-radius:3px; margin-left:2px; opacity:0; transition:opacity 0.15s; }
@@ -231,7 +235,7 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .clip-card-thumb img { width:100%; height:100%; object-fit:cover; }
 .clip-card-thumb .text-preview, .clip-card-thumb .link-preview { padding:8px; font-size:10px; color:var(--text-muted); line-height:1.4; word-break:break-word; overflow:hidden; max-height:100%; }
 .clip-card-info { padding:6px 8px; }
-.clip-card-title { font-size:11px; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.clip-card-title { font-size:11px; font-weight:500; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; word-break:break-all; line-height:1.3; max-height:2.6em; }
 .clip-card-meta { display:flex; justify-content:space-between; font-size:9px; color:var(--text-muted); margin-top:2px; }
 
 /* Always-visible delete button on card */
@@ -248,7 +252,7 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .clip-card-fav.active { color:var(--accent-yellow); opacity:1; }
 
 /* Selection rectangle */
-.selection-rect { position:absolute; border:1px solid var(--accent-green); background:rgba(52,199,89,0.08); z-index:10; pointer-events:none; }
+.selection-rect { position:absolute; border:1px solid rgba(10,132,255,0.6); background:rgba(10,132,255,0.1); z-index:10; pointer-events:none; }
 
 /* Empty state */
 .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--text-muted); text-align:center; }
@@ -284,6 +288,8 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 .library-tab .lib-tab-close { background:none; border:none; color:var(--text-muted); font-size:14px; cursor:pointer; padding:2px 4px; line-height:1; margin-left:2px; opacity:0; transition:opacity 0.15s; border-radius:3px; }
 .library-tab:hover .lib-tab-close { opacity:1; }
 .library-tab .lib-tab-close:hover { color:var(--accent-red); background:var(--bg-hover); }
+.library-tab.drag-over { background:rgba(52,199,89,0.15); border-color:rgba(52,199,89,0.4); color:var(--text-primary); }
+.library-tab.external-drop-ready { border-color:rgba(52,199,89,0.3); background:rgba(52,199,89,0.06); animation:pulse-border 1.5s ease-in-out infinite; }
 .library-search { display:flex; align-items:center; gap:6px; width:160px; flex-shrink:0; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:3px 8px; margin:4px 8px 4px auto; height:26px; position:relative; }
 .library-search input { flex:1; background:none; border:none; color:var(--text-primary); outline:none; font-size:11px; min-width:0; }
 .library-search input::placeholder { color:var(--text-muted); }
@@ -293,9 +299,13 @@ html, body { height:100%; overflow:hidden; font-family:-apple-system,BlinkMacSys
 
 /* Clip grid sizing modes */
 .clip-grid.grid-xs { grid-template-columns:repeat(auto-fill, minmax(80px, 1fr)); gap:4px; }
+.clip-grid.grid-xs .clip-card-thumb { height:60px; }
 .clip-grid.grid-sm { grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:6px; }
+.clip-grid.grid-sm .clip-card-thumb { height:80px; }
 .clip-grid.grid-md { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px; }
+.clip-grid.grid-md .clip-card-thumb { height:110px; }
 .clip-grid.grid-lg { grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; }
+.clip-grid.grid-lg .clip-card-thumb { height:150px; }
 
 /* Explorer controls */
 .explorer-search { display:flex; align-items:center; gap:6px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:4px 8px; flex:1; min-width:0; }
@@ -325,11 +335,26 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 .explorer-file-list.thumb-grid .file-item,
 .explorer-file-list.thumb-grid-lg .file-item { flex-direction:column; align-items:center; text-align:center; padding:6px 4px; border-radius:var(--radius-sm); }
 .explorer-file-list.thumb-grid .file-item-thumb,
-.explorer-file-list.thumb-grid-lg .file-item-thumb { width:100%; aspect-ratio:1; border-radius:var(--radius-sm); overflow:hidden; margin-bottom:4px; background:var(--bg-tertiary); display:flex; align-items:center; justify-content:center; }
+.explorer-file-list.thumb-grid-lg .file-item-thumb { width:100%; aspect-ratio:1; border-radius:var(--radius-sm); overflow:hidden; margin-bottom:4px; background:var(--bg-tertiary); display:flex; align-items:center; justify-content:center; border:1px solid var(--border); }
 .explorer-file-list.thumb-grid .file-item-thumb img,
 .explorer-file-list.thumb-grid-lg .file-item-thumb img { width:100%; height:100%; object-fit:cover; }
+/* Image placeholder for lazy loading */
+.explorer-img-placeholder { width:100%; height:100%; background:var(--bg-tertiary); border-radius:4px; }
+/* File type icon badge in grid thumbnail top-left */
+.file-thumb-badge { position:absolute; top:4px; left:4px; z-index:2; display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:4px; background:rgba(0,0,0,0.55); backdrop-filter:blur(4px); pointer-events:none; }
+.file-thumb-badge svg { width:12px !important; height:12px !important; }
+.explorer-file-list.thumb-grid .file-item-thumb,
+.explorer-file-list.thumb-grid-lg .file-item-thumb { position:relative; }
+/* Larger folder icons in grid mode */
+.explorer-file-list.thumb-grid .file-item-thumb svg,
+.explorer-file-list.thumb-grid-lg .file-item-thumb svg { width:48px; height:48px; }
+.file-item-folder-thumb svg { width:48px !important; height:48px !important; }
+/* Text file preview in explorer grid */
+.file-item-text-preview { overflow:hidden; padding:0; }
+.explorer-text-preview-loading { display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
+.explorer-text-content { font-size:7px; line-height:1.3; color:var(--text-muted); padding:6px; white-space:pre-wrap; word-break:break-word; overflow:hidden; max-height:100%; }
 .explorer-file-list.thumb-grid .file-item-name,
-.explorer-file-list.thumb-grid-lg .file-item-name { font-size:8px; word-break:break-all; line-height:1.15; max-height:2.3em; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; padding:0 2px; width:100%; box-sizing:border-box; }
+.explorer-file-list.thumb-grid-lg .file-item-name { font-size:8px; word-break:break-all; line-height:1.15; max-height:4.6em; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:4; line-clamp:4; -webkit-box-orient:vertical; padding:0 2px; width:100%; box-sizing:border-box; }
 .explorer-file-list.thumb-grid .file-item-meta,
 .explorer-file-list.thumb-grid-lg .file-item-meta { display:none; }
 
@@ -417,9 +442,14 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 .file-item.selected { background:rgba(52,199,89,0.15); outline:1px solid rgba(52,199,89,0.4); }
 .file-item.selected:hover { background:rgba(52,199,89,0.22); }
 .file-item.drag-over { background:rgba(52,199,89,0.1); outline:1px solid var(--accent-green); }
+.file-item.dragging { opacity:0.5; }
+/* Browse-to highlight animation (used by Browse in Sidebar / Browse in Library) */
+.browse-highlight { animation:browseHighlight 2s ease-out; }
+@keyframes browseHighlight { 0%,30% { outline:2px solid var(--accent-green); outline-offset:-1px; background:rgba(52,199,89,0.2); } 100% { outline:2px solid transparent; background:transparent; } }
+.explorer-file-list.explorer-drop-target { outline:2px dashed var(--accent-green); outline-offset:-2px; background:rgba(52,199,89,0.04); }
 .explorer-status-bar { display:flex; align-items:center; gap:12px; padding:4px 10px; border-top:1px solid var(--border); flex-shrink:0; font-size:10px; color:var(--text-muted); background:var(--bg-secondary); }
 .explorer-status-bar span:not(:empty)::before { content:''; }
-.explorer-selection-rect { position:absolute; border:1px solid rgba(52,199,89,0.6); background:rgba(52,199,89,0.1); pointer-events:none; z-index:5; }
+.explorer-selection-rect { position:absolute; border:1px solid rgba(10,132,255,0.6); background:rgba(10,132,255,0.1); pointer-events:none; z-index:5; }
 .file-item-icon { width:20px; height:20px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .file-item-name { flex:1; font-size:11px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .file-item-meta { font-size:9px; color:var(--text-muted); flex-shrink:0; }
@@ -433,12 +463,14 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 .action-btn.accent-blue { border-color:rgba(10,132,255,0.3); color:var(--accent-blue); }
 .action-btn.accent-yellow { border-color:rgba(255,204,0,0.3); color:var(--accent-yellow); }
 
-/* ===== Drop zone ===== */
-.drop-zone { position:fixed; inset:0; z-index:999; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; }
+/* ===== Drop zone (scoped to clip area) ===== */
+.drop-zone { position:absolute; inset:0; z-index:50; background:rgba(0,0,0,0.82); display:flex; align-items:center; justify-content:center; border-radius:var(--radius-md); border:2px dashed var(--accent-green); pointer-events:auto; }
 .drop-zone.hidden { display:none; }
 .drop-zone-inner { text-align:center; color:var(--accent-green); }
 .drop-zone-inner svg { margin-bottom:16px; }
 .drop-zone-inner p { font-size:16px; color:var(--text-secondary); }
+/* Clip area highlight when dragging files over the library with a folder tab active */
+.clip-area-wrapper.drag-highlight { outline:2px dashed var(--accent-green); outline-offset:-2px; background:rgba(52,199,89,0.04); }
 
 /* ===== Toasts ===== */
 .toast-container { position:fixed; bottom:16px; right:16px; z-index:9999; display:flex; flex-direction:column-reverse; gap:8px; }
@@ -466,6 +498,12 @@ input[type="range"].modern-slider:active::-webkit-slider-thumb, .library-scale i
 .btn-secondary:hover { background:var(--bg-hover); color:var(--text-primary); }
 .btn-danger { background:rgba(255,69,58,0.12); color:var(--accent-red); font-weight:600; border:1px solid rgba(255,69,58,0.35); }
 .btn-danger:hover { background:rgba(255,69,58,0.2); }
+
+/* Fit thumbnails mode — preserve aspect ratio */
+body.fit-thumbnails .clip-card-thumb img { object-fit:contain !important; }
+body.fit-thumbnails .file-item-thumb img { object-fit:contain !important; }
+body.fit-thumbnails .folder-paper img { object-fit:contain !important; }
+body.fit-thumbnails .tab-preview img { object-fit:contain !important; }
 
 /* Glow */
 .clip-glow { position:absolute; inset:-50px; pointer-events:none; filter:blur(40px); opacity:0.5; transition:all 1s ease; z-index:0; }

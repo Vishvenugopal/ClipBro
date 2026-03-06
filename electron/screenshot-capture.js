@@ -35,6 +35,7 @@ class ScreenshotCapture {
       const id = uuidv4();
       const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
       const filePath = path.join(this.clipsDir, `Screenshot_${timestamp}.png`);
+      if (!fs.existsSync(this.clipsDir)) fs.mkdirSync(this.clipsDir, { recursive: true });
       const pngBuffer = image.toPNG();
       fs.writeFileSync(filePath, pngBuffer);
 
@@ -265,6 +266,7 @@ class ScreenshotCapture {
           const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
           const filePath = path.join(this.clipsDir, `Screenshot_${timestamp}.png`);
           const pngBuffer = cropped.toPNG();
+          if (!fs.existsSync(this.clipsDir)) fs.mkdirSync(this.clipsDir, { recursive: true });
           fs.writeFileSync(filePath, pngBuffer);
 
           const croppedSize = cropped.getSize();

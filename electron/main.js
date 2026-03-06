@@ -3,14 +3,21 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
+// Enable GC access for memory management when minimized to tray
+app.commandLine.appendSwitch('js-flags', '--expose-gc');
+// Reduce GPU memory usage
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('gpu-rasterization-msaa-sample-count', '0');
+
 // Modules
 const ClipboardMonitor = require('./clipboard-monitor');
 const ScreenshotCapture = require('./screenshot-capture');
 const ClipDatabase = require('./database');
-const ShareServer = require('./share-server');
-const AIEngine = require('./ai-engine');
 const FileManager = require('./file-manager');
-const OllamaManager = require('./ollama-manager');
+// Lazy-loaded modules (heavy dependencies like express)
+let ShareServer = null;
+let AIEngine = null;
+let OllamaManager = null;
 
 let mainWindow = null;
 let tray = null;
@@ -23,8 +30,9 @@ let fileManager = null;
 let ollamaManager = null;
 let isQuitting = false;
 
-// Set app identity for Windows notifications
+// Set app identity for Windows taskbar / notifications
 app.setAppUserModelId('com.clipbro.app');
+app.setName('ClipBro');
 
 // Filesystem watcher for live explorer updates
 const activeWatchers = new Map(); // dirPath -> fs.FSWatcher
@@ -70,7 +78,10 @@ function unwatchAllDirectories() {
 }
 
 const DATA_DIR = path.join(app.getPath('userData'), 'UniversalClipboard');
-const CLIPS_DIR = path.join(DATA_DIR, 'clips');
+const CLIPS_DIR = path.join(DATA_DIR, 'All Clips');
+const OLD_CLIPS_DIR = path.join(DATA_DIR, 'clips');
+const OLD_UF_DIR = path.join(DATA_DIR, 'UserFolders');
+const OLD_UF_CLIPS_DIR = path.join(OLD_UF_DIR, 'All Clips');
 const HIDDEN_DIR = path.join(DATA_DIR, '.hidden');
 const THUMBNAILS_DIR = path.join(DATA_DIR, 'thumbnails');
 
@@ -78,6 +89,138 @@ function ensureDirectories() {
   [DATA_DIR, CLIPS_DIR, HIDDEN_DIR, THUMBNAILS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   });
+}
+
+/** Migrate clips from legacy directories to All Clips/ */
+function migrateClipsDirectory(database) {
+  // Migration 1: old DATA_DIR/clips/ → All Clips/
+  if (fs.existsSync(OLD_CLIPS_DIR)) {
+    const files = fs.readdirSync(OLD_CLIPS_DIR);
+    if (files.length > 0) {
+      console.log(`[Migration] Moving ${files.length} clip(s) from clips/ to All Clips/...`);
+      for (const f of files) {
+        const src = path.join(OLD_CLIPS_DIR, f);
+        const dest = path.join(CLIPS_DIR, f);
+        if (!fs.existsSync(dest)) {
+          try { fs.copyFileSync(src, dest); } catch (e) { console.warn('[Migration] Failed to copy:', f, e.message); }
+        }
+      }
+      try {
+        for (const f of files) { const s = path.join(OLD_CLIPS_DIR, f); if (fs.existsSync(s)) fs.unlinkSync(s); }
+        fs.rmdirSync(OLD_CLIPS_DIR);
+        console.log('[Migration] Old clips/ directory removed.');
+      } catch (e) { console.warn('[Migration] Could not remove old clips dir:', e.message); }
+    }
+  }
+  // Migration 2: UserFolders/All Clips/ → All Clips/  (and subfolders)
+  if (fs.existsSync(OLD_UF_DIR)) {
+    // Move files from UserFolders/All Clips/ into new CLIPS_DIR
+    if (fs.existsSync(OLD_UF_CLIPS_DIR)) {
+      const entries = fs.readdirSync(OLD_UF_CLIPS_DIR);
+      console.log(`[Migration] Moving ${entries.length} item(s) from UserFolders/All Clips/ to All Clips/...`);
+      for (const e of entries) {
+        const src = path.join(OLD_UF_CLIPS_DIR, e);
+        const dest = path.join(CLIPS_DIR, e);
+        if (!fs.existsSync(dest)) {
+          try { fs.renameSync(src, dest); } catch (err) {
+            try { fs.copyFileSync(src, dest); fs.unlinkSync(src); } catch (e2) { console.warn('[Migration] Failed:', e, e2.message); }
+          }
+        }
+      }
+    }
+    // Move any other subfolders from UserFolders/ into All Clips/
+    try {
+      const ufEntries = fs.readdirSync(OLD_UF_DIR);
+      for (const e of ufEntries) {
+        if (e === 'All Clips') continue;
+        const src = path.join(OLD_UF_DIR, e);
+        const dest = path.join(CLIPS_DIR, e);
+        if (fs.statSync(src).isDirectory() && !fs.existsSync(dest)) {
+          try { fs.renameSync(src, dest); } catch (err) { console.warn('[Migration] Could not move subfolder:', e, err.message); }
+        }
+      }
+    } catch (e) { console.warn('[Migration] UserFolders scan error:', e.message); }
+    // Remove old UserFolders/
+    try {
+      fs.rmSync(OLD_UF_DIR, { recursive: true, force: true });
+      console.log('[Migration] Old UserFolders/ directory removed.');
+    } catch (e) { console.warn('[Migration] Could not remove UserFolders:', e.message); }
+  }
+  // Update DB paths
+  if (database) {
+    try {
+      const clips = database.getClips();
+      for (const clip of clips) {
+        if (clip.filePath) {
+          let newPath = clip.filePath;
+          if (newPath.includes(path.join('UserFolders', 'All Clips'))) {
+            newPath = newPath.replace(path.join(DATA_DIR, 'UserFolders', 'All Clips'), CLIPS_DIR);
+          } else if (newPath.startsWith(OLD_CLIPS_DIR)) {
+            newPath = newPath.replace(OLD_CLIPS_DIR, CLIPS_DIR);
+          }
+          if (newPath !== clip.filePath) database.updateClip(clip.id, { filePath: newPath });
+        }
+      }
+      // Update folder paths
+      const folders = database.getFolders();
+      for (const f of folders) {
+        if (f.path && f.path.includes('UserFolders')) {
+          const newPath = f.path.replace(path.join(DATA_DIR, 'UserFolders', 'All Clips'), CLIPS_DIR)
+                                 .replace(path.join(DATA_DIR, 'UserFolders'), CLIPS_DIR);
+          if (newPath !== f.path) database.updateFolder(f.id, { path: newPath });
+        }
+      }
+    } catch (e) { console.warn('[Migration] DB path update error:', e.message); }
+  }
+}
+
+/** Scan All Clips directory and register any files that aren't tracked in the DB */
+function syncFilesystemToDB(database, clipsDir) {
+  try {
+    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.ico'];
+    const textExts = ['.txt', '.md', '.json', '.csv', '.xml', '.html', '.css', '.js', '.ts', '.py'];
+
+    // Build a set of all filePaths already known to the DB
+    const existingClips = database.getClips();
+    const knownPaths = new Set(existingClips.map(c => c.filePath).filter(Boolean));
+
+    // Scan the clips directory (non-recursive — only top-level files)
+    if (!fs.existsSync(clipsDir)) return;
+    const entries = fs.readdirSync(clipsDir, { withFileTypes: true });
+    let synced = 0;
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) continue; // skip subdirectories
+      const fullPath = path.join(clipsDir, entry.name);
+      if (knownPaths.has(fullPath)) continue; // already tracked
+
+      const ext = path.extname(entry.name).toLowerCase();
+      let type = 'file';
+      if (imageExts.includes(ext)) type = 'image';
+      else if (textExts.includes(ext)) type = 'text';
+
+      try {
+        const stat = fs.statSync(fullPath);
+        const clipData = {
+          type,
+          title: entry.name,
+          filePath: fullPath,
+          fileSize: stat.size,
+          source: 'filesystem',
+          createdAt: stat.mtimeMs || Date.now()
+        };
+        if (type === 'text') {
+          try { clipData.content = fs.readFileSync(fullPath, 'utf-8'); } catch {}
+        }
+        database.saveClip(clipData);
+        synced++;
+      } catch (e) { /* skip inaccessible files */ }
+    }
+
+    if (synced > 0) console.log(`[Sync] Registered ${synced} untracked file(s) from All Clips`);
+  } catch (e) {
+    console.warn('[Sync] Filesystem scan error:', e.message);
+  }
 }
 
 function createMainWindow() {
@@ -126,14 +269,36 @@ function createMainWindow() {
     }
   });
 
-  // Reduce memory when hidden
+  // Aggressively reduce memory when hidden (minimized to tray)
   mainWindow.on('hide', () => {
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('window-visibility', false);
+      // Keep clipboard monitoring active so desktop notifications still fire when in tray
+      // Close all filesystem watchers to release handles & callbacks
+      unwatchAllDirectories();
+      // Clear HTTP/code caches to free memory
+      mainWindow.webContents.session.clearCache().catch(() => {});
+      mainWindow.webContents.session.clearCodeCaches({}).catch(() => {});
+      // Background throttling ensures Chromium deprioritises the hidden renderer
+      mainWindow.webContents.setBackgroundThrottling(true);
+      // Trigger renderer-side garbage collection (gc is exposed via --js-flags)
+      mainWindow.webContents.executeJavaScript(`
+        if (typeof gc === 'function') gc();
+      `).catch(() => {});
+      // Main process GC
+      if (typeof global.gc === 'function') global.gc();
+      // Delayed second GC pass to catch deferred garbage
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isVisible()) {
+          mainWindow.webContents.executeJavaScript('if(typeof gc==="function")gc();').catch(() => {});
+          if (typeof global.gc === 'function') global.gc();
+        }
+      }, 5000);
     }
   });
   mainWindow.on('show', () => {
     if (mainWindow && mainWindow.webContents) {
+      // Clipboard monitoring stays active for tray notifications — no resume needed
       mainWindow.webContents.send('window-visibility', true);
     }
   });
@@ -218,7 +383,7 @@ function importFromClipboard() {
 }
 
 const DEFAULT_HOTKEYS = {
-  toggleApp: 'CommandOrControl+Shift+V',
+  toggleApp: 'CommandOrControl+Alt+V',
   screenshot: 'PrintScreen',
   screenshotSelection: 'CommandOrControl+Shift+S'
 };
@@ -292,7 +457,6 @@ function setupIPC() {
   });
 
   ipcMain.handle('delete-clip', async (_, id) => {
-    const { shell } = require('electron');
     const clip = db.getClip(id);
     if (clip && clip.filePath && fs.existsSync(clip.filePath)) {
       try { await shell.trashItem(clip.filePath); } catch (e) { console.warn('Could not trash clip file:', e.message); }
@@ -315,7 +479,6 @@ function setupIPC() {
 
   // Hard-delete: trash the file only (DB already cleared by soft-delete)
   ipcMain.handle('trash-clip-file', async (_, filePath) => {
-    const { shell } = require('electron');
     if (filePath && fs.existsSync(filePath)) {
       try { await shell.trashItem(filePath); } catch (e) { console.warn('Could not trash clip file:', e.message); }
     }
@@ -351,15 +514,56 @@ function setupIPC() {
   });
 
   ipcMain.handle('create-folder', async (_, folderData) => {
+    // Create the filesystem directory if a path is specified
+    if (folderData.path && !fs.existsSync(folderData.path)) {
+      fs.mkdirSync(folderData.path, { recursive: true });
+    }
     return db.createFolder(folderData);
   });
 
   ipcMain.handle('move-clip-to-folder', async (_, clipId, folderId) => {
-    return db.moveClipToFolder(clipId, folderId);
+    const result = db.moveClipToFolder(clipId, folderId);
+    // If the target folder has a filesystem path, also copy the clip file there
+    // so it appears in the file explorer / Windows Explorer
+    try {
+      const folder = db.getFolder ? db.getFolder(folderId) : null;
+      const clip = db.getClip(clipId);
+      if (folder && folder.path && clip && clip.filePath && fs.existsSync(clip.filePath)) {
+        if (!fs.existsSync(folder.path)) fs.mkdirSync(folder.path, { recursive: true });
+        const ext = path.extname(clip.filePath);
+        const safeName = (clip.title || clip.id).replace(/[<>:"/\\|?*]/g, '_');
+        const destFile = path.join(folder.path, `${safeName}${ext}`);
+        if (!fs.existsSync(destFile)) {
+          fs.copyFileSync(clip.filePath, destFile);
+        }
+      }
+    } catch (e) { console.warn('Could not copy clip to folder path:', e.message); }
+    return result;
   });
 
   ipcMain.handle('pin-folder', async (_, folderId, pinned) => {
     return db.pinFolder(folderId, pinned);
+  });
+
+  // Sync all clips in a folder to its filesystem path (so they show in file explorer)
+  ipcMain.handle('sync-folder-files', async (_, folderId) => {
+    try {
+      const folder = db.getFolder(folderId);
+      if (!folder || !folder.path) return { synced: 0 };
+      if (!fs.existsSync(folder.path)) fs.mkdirSync(folder.path, { recursive: true });
+      const clips = db.getClips().filter(c => c.folderId === folderId && c.filePath && fs.existsSync(c.filePath));
+      let synced = 0;
+      for (const clip of clips) {
+        const ext = path.extname(clip.filePath);
+        const safeName = (clip.title || clip.id).replace(/[<>:"/\\|?*]/g, '_');
+        const destFile = path.join(folder.path, `${safeName}${ext}`);
+        if (!fs.existsSync(destFile)) {
+          fs.copyFileSync(clip.filePath, destFile);
+          synced++;
+        }
+      }
+      return { synced };
+    } catch (e) { console.warn('sync-folder-files error:', e.message); return { synced: 0 }; }
   });
 
   ipcMain.handle('update-folder', async (_, folderId, updates) => {
@@ -408,6 +612,7 @@ function setupIPC() {
 
   // Screenshot editing
   ipcMain.handle('save-edited-clip', async (_, clipId, imageDataUrl) => {
+    ensureDirectories();
     const clip = db.getClip(clipId);
     // Preserve the previous version's file by copying it to a versioned backup
     if (clip && clip.filePath && fs.existsSync(clip.filePath)) {
@@ -536,6 +741,21 @@ function setupIPC() {
     return [];
   });
 
+  // Import files from paths (for external drag-and-drop)
+  ipcMain.handle('import-files-from-paths', async (_, filePaths) => {
+    if (!filePaths || filePaths.length === 0) return [];
+    const imported = fileManager.importFiles(filePaths);
+    // Notify renderer about new clips
+    if (imported && imported.length > 0) {
+      for (const clip of imported) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('new-clip', clip);
+        }
+      }
+    }
+    return imported;
+  });
+
   ipcMain.handle('export-clip', async (_, clipId, destPath) => {
     return fileManager.exportClip(clipId, destPath);
   });
@@ -544,8 +764,14 @@ function setupIPC() {
     const clip = db.getClip(clipId);
     if (!clip) return null;
     const ext = clip.type === 'image' ? 'png' : 'txt';
+    // Build a descriptive default filename from clip type + timestamp
+    const d = new Date(clip.createdAt || Date.now());
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    const prefix = clip.type === 'image' ? 'Screenshot' : 'Text';
+    const defaultName = `${prefix}_${stamp}.${ext}`;
     const result = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: `clip_${clip.id}.${ext}`,
+      defaultPath: defaultName,
       filters: clip.type === 'image'
         ? [{ name: 'Images', extensions: ['png', 'jpg'] }]
         : [{ name: 'Text', extensions: ['txt', 'md'] }]
@@ -611,6 +837,16 @@ function setupIPC() {
     return { ...DEFAULT_HOTKEYS };
   });
 
+  // Suspend/resume global shortcuts while capturing keybinds in settings
+  ipcMain.handle('suspend-shortcuts', async () => {
+    globalShortcut.unregisterAll();
+    return true;
+  });
+  ipcMain.handle('resume-shortcuts', async () => {
+    registerShortcuts();
+    return true;
+  });
+
   // Choose directory
   ipcMain.handle('choose-directory', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -625,7 +861,6 @@ function setupIPC() {
   // Clear all clips (move to recycle bin)
   ipcMain.handle('clear-all-clips', async () => {
     try {
-      const { shell } = require('electron');
       const clips = db.getClips();
       for (const clip of clips) {
         if (clip.filePath && fs.existsSync(clip.filePath)) {
@@ -778,6 +1013,136 @@ function setupIPC() {
     }
   });
 
+  // Native file drag from explorer panel
+  ipcMain.on('explorer-drag-start', (event, filePaths) => {
+    const validPaths = (Array.isArray(filePaths) ? filePaths : [filePaths]).filter(p => fs.existsSync(p));
+    if (validPaths.length === 0) return;
+    // Use first file for icon
+    const first = validPaths[0];
+    const ext = path.extname(first).toLowerCase();
+    const imgExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
+    let icon;
+    if (imgExts.includes(ext)) {
+      try { icon = nativeImage.createFromPath(first).resize({ width: 64, height: 64 }); } catch { icon = nativeImage.createEmpty(); }
+    } else {
+      icon = nativeImage.createEmpty();
+    }
+    if (icon.isEmpty()) {
+      // Create a small placeholder icon
+      icon = nativeImage.createFromBuffer(Buffer.alloc(64 * 64 * 4, 128), { width: 64, height: 64 });
+    }
+    event.sender.startDrag({
+      files: validPaths,
+      icon
+    });
+  });
+
+  // Copy external files into a directory (for file manager drop)
+  ipcMain.handle('copy-files-to-dir', async (_, srcPaths, destDir) => {
+    const results = [];
+    for (const src of srcPaths) {
+      try {
+        const basename = path.basename(src);
+        let dest = path.join(destDir, basename);
+        // Avoid overwriting: append number if exists
+        if (fs.existsSync(dest)) {
+          const ext = path.extname(basename);
+          const name = path.basename(basename, ext);
+          let i = 1;
+          while (fs.existsSync(dest)) {
+            dest = path.join(destDir, `${name} (${i})${ext}`);
+            i++;
+          }
+        }
+        fs.copyFileSync(src, dest);
+        results.push({ src, dest, success: true });
+      } catch (e) {
+        results.push({ src, dest: null, success: false, error: e.message });
+      }
+    }
+    return results;
+  });
+
+  // Move files to a directory (for file manager internal drag)
+  ipcMain.handle('move-files-to-dir', async (_, srcPaths, destDir) => {
+    const results = [];
+    for (const src of srcPaths) {
+      try {
+        const basename = path.basename(src);
+        let dest = path.join(destDir, basename);
+        // Avoid overwriting
+        if (fs.existsSync(dest) && dest !== src) {
+          const ext = path.extname(basename);
+          const name = path.basename(basename, ext);
+          let i = 1;
+          while (fs.existsSync(dest)) {
+            dest = path.join(destDir, `${name} (${i})${ext}`);
+            i++;
+          }
+        }
+        if (src !== dest) {
+          fs.renameSync(src, dest);
+        }
+        results.push({ src, dest, success: true });
+      } catch (e) {
+        // If rename fails (cross-device), fallback to copy + recycle bin
+        try {
+          const basename = path.basename(src);
+          let dest = path.join(destDir, basename);
+          fs.copyFileSync(src, dest);
+          await shell.trashItem(src);
+          results.push({ src, dest, success: true });
+        } catch (e2) {
+          results.push({ src, dest: null, success: false, error: e2.message });
+        }
+      }
+    }
+    return results;
+  });
+
+  // Delete files (move to Recycle Bin)
+  ipcMain.handle('delete-files', async (_, filePaths) => {
+    const results = [];
+    for (const fp of filePaths) {
+      try {
+        if (fs.existsSync(fp)) {
+          await shell.trashItem(fp);
+          results.push({ path: fp, success: true });
+        } else {
+          results.push({ path: fp, success: false, error: 'File not found' });
+        }
+      } catch (e) {
+        results.push({ path: fp, success: false, error: e.message });
+      }
+    }
+    return results;
+  });
+
+  // Rename a file or directory
+  ipcMain.handle('rename-file', async (_, oldPath, newName) => {
+    try {
+      const dir = path.dirname(oldPath);
+      const newPath = path.join(dir, newName);
+      if (fs.existsSync(newPath)) return { success: false, error: 'A file with that name already exists' };
+      fs.renameSync(oldPath, newPath);
+      return { success: true, oldPath, newPath };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Create a new directory in the filesystem
+  ipcMain.handle('create-fs-directory', async (_, parentDir, folderName) => {
+    try {
+      const newPath = path.join(parentDir, folderName);
+      if (fs.existsSync(newPath)) return { success: false, error: 'A folder with that name already exists' };
+      fs.mkdirSync(newPath, { recursive: true });
+      return { success: true, path: newPath };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // Filesystem watching for live explorer updates
   ipcMain.handle('watch-directory', async (_, dirPath) => {
     watchDirectory(dirPath);
@@ -791,11 +1156,8 @@ function setupIPC() {
 
   // Get app's default folder path
   ipcMain.handle('get-app-folder', async () => {
-    const appFolder = path.join(DATA_DIR, 'UserFolders');
-    const defaultFolder = path.join(appFolder, 'My Folder');
-    if (!fs.existsSync(appFolder)) fs.mkdirSync(appFolder, { recursive: true });
-    if (!fs.existsSync(defaultFolder)) fs.mkdirSync(defaultFolder, { recursive: true });
-    return appFolder;
+    ensureDirectories();
+    return CLIPS_DIR;
   });
 
   // Get quick-access paths (like Windows explorer sidebar)
@@ -806,7 +1168,7 @@ function setupIPC() {
       documents: app.getPath('documents'),
       downloads: app.getPath('downloads'),
       pictures: app.getPath('pictures'),
-      appFolder: path.join(DATA_DIR, 'UserFolders'),
+      appFolder: CLIPS_DIR,
       clipsFolder: CLIPS_DIR
     };
   });
@@ -819,12 +1181,24 @@ function setupIPC() {
 
   // Copy clip file into a filesystem folder
   ipcMain.handle('copy-clip-to-path', async (_, clipId, destDir) => {
-    const clip = db.getClip(clipId);
-    if (!clip || !clip.filePath || !fs.existsSync(clip.filePath)) return false;
-    const ext = path.extname(clip.filePath);
-    const destFile = path.join(destDir, `${clip.title || clip.id}${ext}`);
-    fs.copyFileSync(clip.filePath, destFile);
-    return true;
+    try {
+      const clip = db.getClip(clipId);
+      if (!clip || !clip.filePath || !fs.existsSync(clip.filePath)) return false;
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      const ext = path.extname(clip.filePath);
+      const safeName = (clip.title || clip.id).replace(/[<>:"/\\|?*]/g, '_');
+      let destFile = path.join(destDir, `${safeName}${ext}`);
+      // Avoid overwriting — append (1), (2), etc.
+      let i = 1;
+      while (fs.existsSync(destFile)) {
+        destFile = path.join(destDir, `${safeName} (${i++})${ext}`);
+      }
+      fs.copyFileSync(clip.filePath, destFile);
+      return true;
+    } catch (e) {
+      console.error('copy-clip-to-path failed:', e.message);
+      return false;
+    }
   });
 }
 
@@ -840,17 +1214,45 @@ app.whenReady().then(async () => {
   const openOnStartup = db.getSetting('openOnStartup');
   app.setLoginItemSettings({ openAtLogin: openOnStartup !== 'false' });
 
+  // Migrate clips from old location if needed
+  migrateClipsDirectory(db);
+
+  // Create default "My Folder" if no folders exist yet (first run)
+  const existingFolders = db.getFolders();
+  if (existingFolders.length === 0) {
+    const myFolderPath = path.join(CLIPS_DIR, 'My Folder');
+    if (!fs.existsSync(myFolderPath)) fs.mkdirSync(myFolderPath, { recursive: true });
+    db.createFolder({ name: 'My Folder', color: '#2d8a4e', pinned: true, path: myFolderPath });
+    console.log('[Init] Created default "My Folder"');
+  } else {
+    // Ensure filesystem directories exist for pinned folders with paths
+    // (Don't recreate directories for unpinned folders — they may have been intentionally deleted)
+    for (const f of existingFolders) {
+      if (f.pinned && f.path && !fs.existsSync(f.path)) {
+        try {
+          fs.mkdirSync(f.path, { recursive: true });
+        } catch (e) { /* skip if cannot create */ }
+      }
+    }
+  }
+
   // Initialize file manager
   fileManager = new FileManager(db, CLIPS_DIR);
 
-  // Initialize share server
+  // Sync filesystem: register any untracked files in All Clips as DB clips
+  syncFilesystemToDB(db, CLIPS_DIR);
+
+  // Initialize share server (lazy-loaded)
+  ShareServer = require('./share-server');
   shareServer = new ShareServer(db, CLIPS_DIR);
   await shareServer.start();
 
-  // Initialize AI engine
+  // Initialize AI engine (lazy-loaded)
+  AIEngine = require('./ai-engine');
   aiEngine = new AIEngine(db, CLIPS_DIR, DATA_DIR);
 
-  // Initialize Ollama manager
+  // Initialize Ollama manager (lazy-loaded)
+  OllamaManager = require('./ollama-manager');
   ollamaManager = new OllamaManager(DATA_DIR);
 
   // Setup IPC BEFORE creating window so handlers are ready when renderer loads

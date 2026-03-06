@@ -77,6 +77,7 @@ class ClipboardMonitor {
 
   handleImageClip(pngBuffer, size) {
     if (!this.saveImageClips) return;
+    if (!fs.existsSync(this.clipsDir)) fs.mkdirSync(this.clipsDir, { recursive: true });
     const id = uuidv4();
     const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '').replace('T', '_');
     const filePath = path.join(this.clipsDir, `Image_${timestamp}.png`);
@@ -99,6 +100,7 @@ class ClipboardMonitor {
 
   handleTextClip(text) {
     if (!this.saveTextClips) return;
+    if (!fs.existsSync(this.clipsDir)) fs.mkdirSync(this.clipsDir, { recursive: true });
     const id = uuidv4();
     let type = 'text';
     let title = text.substring(0, 100);
@@ -161,6 +163,8 @@ class ClipboardMonitor {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.show();
           this.mainWindow.focus();
+          // Tell renderer to open this clip in the editor
+          this.mainWindow.webContents.send('open-clip', clip.id);
         }
       });
       notif.show();

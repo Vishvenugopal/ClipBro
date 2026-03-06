@@ -47,7 +47,7 @@ Global shortcuts are **configurable in Settings → Keyboard Shortcuts**. Defaul
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+Shift+V` | Show/hide app |
+| `Ctrl+Alt+V` | Show/hide app |
 | `Ctrl+Shift+S` | Built-in selection screenshot |
 | `Ctrl+Z` | Undo (editor) |
 | `Ctrl+Shift+Z` | Undo (editor) |
