@@ -1,7 +1,7 @@
 {
   "name": "clipbro",
-  "version": "1.0.0",
-  "description": "ClipBro - Your intelligent clipboard companion with AI features & Screenshot manager for Windows",
+  "version": "1.1.0",
+  "description": "Screenshot and clipboard manager with easy file sharing to phones",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -12,8 +12,8 @@
   "author": "UniversalClipboard",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^28.1.0",
-    "electron-builder": "^24.9.1",
+    "electron": "^40.8.0",
+    "electron-builder": "^26.8.1",
     "electron-icon-builder": "^2.0.1",
     "rcedit": "^5.0.2"
   },
@@ -31,7 +31,10 @@
     "productName": "ClipBro",
     "icon": "assets/clipbro-icons/icon.ico",
     "win": {
-      "target": ["nsis", "appx"],
+      "target": [
+        "nsis",
+        "appx"
+      ],
       "signAndEditExecutable": false,
       "icon": "assets/clipbro-icons/icon.ico"
     },
@@ -46,7 +49,9 @@
       "publisherDisplayName": "Vish Venugopal",
       "applicationId": "ClipBroManager",
       "displayName": "ClipBro Manager",
-      "languages": ["en-US"],
+      "languages": [
+        "en-US"
+      ],
       "backgroundColor": "#0d0d0d"
     },
     "files": [
@@ -61,6 +66,7 @@
         "from": "eng.traineddata",
         "to": "eng.traineddata"
       }
-    ]
+    ],
+    "artifactName": "${productName}-${version}.${ext}"
   }
 }
