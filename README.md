@@ -9,6 +9,7 @@ A powerful screenshot & clipboard manager for Windows, with easy file sharing to
 ClipBro automatically detects screenshots, copied text, images, links, and code. Comes with a well-equipped image and text editor, tons of organization features, and QR code/link generation!
 
 ![Screenshot](assets/GitHub-Media/ClipBroExample3.png)
+![Screenshot](assets/GitHub-Media/ClipBroExample2.png)
 
 ## Features
 
