@@ -293,7 +293,14 @@ function createMainWindow() {
           mainWindow.webContents.executeJavaScript('if(typeof gc==="function")gc();').catch(() => {});
           if (typeof global.gc === 'function') global.gc();
         }
-      }, 5000);
+      }, 8000);
+      // Third GC pass — catches late-released renderer objects after DOM tear-down
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isVisible()) {
+          mainWindow.webContents.executeJavaScript('if(typeof gc==="function")gc();').catch(() => {});
+          if (typeof global.gc === 'function') global.gc();
+        }
+      }, 20000);
     }
   });
   mainWindow.on('show', () => {
@@ -309,18 +316,16 @@ function createMainWindow() {
 }
 
 function createTray() {
-  const trayIconPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'icon.png');
+  // Prefer .ico for tray/taskbar (multi-resolution, better rendering on Windows)
+  const icoPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'icon.ico');
+  const pngPath = path.join(__dirname, '..', 'assets', 'clipbro-icons', 'icon.png');
   let trayIcon;
-  if (fs.existsSync(trayIconPath)) {
-    trayIcon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 });
+  if (fs.existsSync(icoPath)) {
+    trayIcon = nativeImage.createFromPath(icoPath).resize({ width: 16, height: 16 });
+  } else if (fs.existsSync(pngPath)) {
+    trayIcon = nativeImage.createFromPath(pngPath).resize({ width: 16, height: 16 });
   } else {
-    // Fallback to old path
-    const oldPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
-    if (fs.existsSync(oldPath)) {
-      trayIcon = nativeImage.createFromPath(oldPath).resize({ width: 16, height: 16 });
-    } else {
-      trayIcon = nativeImage.createEmpty();
-    }
+    trayIcon = nativeImage.createEmpty();
   }
 
   tray = new Tray(trayIcon.isEmpty() ? createDefaultTrayIcon() : trayIcon);

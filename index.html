@@ -14,8 +14,7 @@
   <div id="titlebar">
     <div class="titlebar-drag">
       <div class="titlebar-logo">
-        <img src="assets/clipbro-icons/Green Guy.png" width="18" height="18" style="border-radius:4px;object-fit:contain" onerror="this.style.display='none';this.nextElementSibling.style.display='block'" />
-        <svg style="display:none;border-radius:4px" width="18" height="18" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><rect width="64" height="64" rx="12" fill="#0a0a0f"/><circle cx="32" cy="32" r="18" fill="#22c55e" opacity="0.85"/></svg>
+        <img src="assets/clipbro-icons/icon.png" width="18" height="18" style="border-radius:4px;object-fit:contain" onerror="this.style.display='none'" />
         <span>ClipBro</span>
       </div>
     </div>
@@ -41,14 +40,7 @@
       <aside id="leftSidebar" class="left-sidebar">
         <div class="sidebar-resize-handle" id="leftResizeHandle"></div>
 
-        <!-- Search bar (top of sidebar) -->
-        <div class="sidebar-search">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-          <input type="text" id="searchInput" placeholder="Search recent clips..." />
-          <button class="search-filter-btn" id="recentFilterBtn" title="Filters">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-          </button>
-        </div>
+
 
         <!-- Recent image clips -->
         <div class="left-section left-section-recent">
@@ -256,9 +248,8 @@
             </button>
             <span id="sortTitle" style="font-size:12px;font-weight:600;color:var(--text-primary)"></span>
             <div class="sort-bar-spacer"></div>
-            <button class="sort-bar-btn" id="selectModeBtnSort" title="Select multiple">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-            </button>
+            <div class="lib-quick-filters" id="libQuickFilters"></div>
+
             <span class="sort-label">Sort:</span>
             <select id="sortSelect">
               <option value="newest">Newest First</option>
@@ -374,8 +365,12 @@
             <input type="range" id="explorerThumbScale" min="0" max="2" value="0" step="1" title="Thumbnail size" style="width:50px" />
           </div>
         </div>
-        <!-- File list -->
-        <div class="explorer-file-list" id="explorerFileList"></div>
+        <!-- File list with scroll fades -->
+        <div class="explorer-file-list-wrap">
+          <div class="explorer-fade-top" id="explorerFadeTop"></div>
+          <div class="explorer-file-list" id="explorerFileList"></div>
+          <div class="explorer-fade-bottom" id="explorerFadeBottom"></div>
+        </div>
         <!-- Status bar -->
         <div class="explorer-status-bar" id="explorerStatusBar">
           <span id="explorerFileCount">0 items</span>

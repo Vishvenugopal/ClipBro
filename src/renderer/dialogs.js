@@ -198,6 +198,7 @@ const Dialogs = {
           App.renderPinnedFolders();
           await App._refreshActiveFolderTab();
           App.renderClipGrid();
+          App.renderLibraryTabs();
           App.refreshExplorer();
           App.toast(`Moved to ${folder.name}`, 'success');
           return;
@@ -207,6 +208,7 @@ const Dialogs = {
         App.pushUndo({ type: 'move', clipId: clip.id, oldFolderId, newFolderId: btn.dataset.folderId, folderName: folder ? folder.name : 'folder' });
         await App.loadData();
         App.renderPinnedFolders();
+        await App._refreshActiveFolderTab();
         App.renderClipGrid();
         App.renderLeftSidebar();
         App.renderLibraryTabs();

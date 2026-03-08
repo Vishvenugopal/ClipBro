@@ -187,16 +187,10 @@ const App = {
     document.getElementById('titleMaxBtn').addEventListener('click', () => ucb.maximize());
     document.getElementById('titleCloseBtn').addEventListener('click', () => ucb.close());
 
-    // Search (left sidebar - filters recent clips list only)
-    const searchInput = document.getElementById('searchInput');
-    let searchTimeout;
-    searchInput.addEventListener('input', (e) => {
-      clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => this.handleRecentSearch(e.target.value), 300);
-    });
+    // Search bar removed from recent clips sidebar
 
     // Tab bar actions
-    document.getElementById('selectModeBtnSort').addEventListener('click', () => this.toggleSelectMode());
+    // Select mode button removed — user enters via shift-click or selection drag
     document.getElementById('importBtn').addEventListener('click', () => ucb.pasteFromClipboard());
     document.getElementById('importFileBtn').addEventListener('click', () => this.importFiles());
     document.getElementById('screenshotBtn').addEventListener('click', () => this.takeScreenshot());
@@ -253,10 +247,7 @@ const App = {
     });
 
     // Search filter buttons
-    document.getElementById('recentFilterBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._toggleSearchFilterDropdown('recentFilterBtn', 'searchInput', 'recent');
-    });
+    // Recent filter button removed with search bar
     document.getElementById('libraryFilterBtn').addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleSearchFilterDropdown('libraryFilterBtn', 'librarySearchInput', 'library');
@@ -323,6 +314,12 @@ const App = {
     document.getElementById('explorerFilterBtn').addEventListener('click', () => {
       this._toggleSearchFilterDropdown('explorerFilterBtn', 'explorerSearchInput', 'explorer');
     });
+
+    // Explorer scroll fades
+    const explorerFileList = document.getElementById('explorerFileList');
+    if (explorerFileList) {
+      explorerFileList.addEventListener('scroll', () => this._updateExplorerFades());
+    }
 
     // Keyboard
     document.addEventListener('keydown', (e) => this.handleKeyboard(e));
@@ -511,25 +508,36 @@ const App = {
     clipArea.addEventListener('mousedown', (e) => {
       if (e.target.closest('.clip-card')) return;
       if (e.button !== 0) return;
-      // Auto-enter select mode on drag-select
-      if (!this.selectMode) {
-        this.selectMode = true;
-        const sortBtn = document.getElementById('selectModeBtnSort');
-        if (sortBtn) sortBtn.classList.add('active');
-        this.renderClipGrid();
-      }
-      isDragging = true;
+      // Track potential drag start — don't enter select mode until actual drag
+      this._dragSelectPending = true;
+      isDragging = false;
       const rect = clipArea.getBoundingClientRect();
       startX = e.clientX - rect.left + clipArea.scrollLeft;
       startY = e.clientY - rect.top + clipArea.scrollTop;
+      this._dragStartClientX = e.clientX;
+      this._dragStartClientY = e.clientY;
       selRect.style.left = startX + 'px';
       selRect.style.top = startY + 'px';
       selRect.style.width = '0';
       selRect.style.height = '0';
-      selRect.classList.remove('hidden');
     });
 
     document.addEventListener('mousemove', (e) => {
+      if (!this._dragSelectPending && !isDragging) return;
+      // Check if we should start actual drag select (threshold: 5px)
+      if (this._dragSelectPending && !isDragging) {
+        const dx = Math.abs(e.clientX - this._dragStartClientX);
+        const dy = Math.abs(e.clientY - this._dragStartClientY);
+        if (dx < 5 && dy < 5) return; // Not enough movement yet
+        // Start actual drag select
+        this._dragSelectPending = false;
+        isDragging = true;
+        if (!this.selectMode) {
+          this.selectMode = true;
+          this.renderClipGrid();
+        }
+        selRect.classList.remove('hidden');
+      }
       if (!isDragging) return;
       const rect = clipArea.getBoundingClientRect();
       const curX = e.clientX - rect.left + clipArea.scrollLeft;
@@ -579,6 +587,16 @@ const App = {
         isDragging = false;
         selRect.classList.add('hidden');
         clearInterval(scrollInterval);
+      }
+      // If it was just a click (no drag started), exit select mode
+      if (this._dragSelectPending) {
+        this._dragSelectPending = false;
+        if (this.selectMode) {
+          this.selectMode = false;
+          this.selectedClips.clear();
+          this.renderClipGrid();
+          this.updateBulkUI();
+        }
       }
     });
   },
@@ -718,7 +736,12 @@ const App = {
         this._pinnedFolderCounts = {};
         // 8. Clear explorer entries cache
         this._lastExplorerEntries = null;
-        // 9. Persist open tabs to settings before clearing (survive quit-from-tray)
+        // 9. Clear folder clips cache
+        this._folderClipsCache = null;
+        // 10. Disconnect any active IntersectionObservers
+        if (this._explorerImgObserver) { this._explorerImgObserver.disconnect(); this._explorerImgObserver = null; }
+        if (this._clipLazyObserver) { this._clipLazyObserver.disconnect(); this._clipLazyObserver = null; }
+        // 11. Persist open tabs to settings before clearing (survive quit-from-tray)
         this._saveTabState();
         this._savedTabIds = this.openTabs.map(t => t.id);
         this._savedActiveTabId = this.activeTabId || null;
@@ -760,8 +783,6 @@ const App = {
   toggleSelectMode() {
     this.selectMode = !this.selectMode;
     this.selectedClips.clear();
-    const sortBtn = document.getElementById('selectModeBtnSort');
-    if (sortBtn) sortBtn.classList.toggle('active', this.selectMode);
     this.renderClipGrid();
     this.updateBulkUI();
   },
@@ -831,7 +852,8 @@ const App = {
     folders.forEach(folder => {
       const btn = document.createElement('button');
       btn.className = 'context-menu-item';
-      btn.textContent = folder.name;
+      const folderColor = folder.color || '#4cd964';
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${folderColor}" stroke-width="2" style="flex-shrink:0"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" fill="${folderColor}30"/></svg><span>${App.escapeHtml(folder.name)}</span>`;
       btn.addEventListener('click', async () => {
         this.dismissContextMenu();
         const ids = [...this.selectedClips];
@@ -922,12 +944,14 @@ const App = {
           // Update the count label in the DOM directly
           const card = document.querySelector(`.pinned-folder-card[data-folder-id="${f.id}"]`);
           if (card) {
-            const countEl = card.querySelector('.pinned-folder-card-count');
-            if (countEl) countEl.textContent = `${totalCount} item${totalCount !== 1 ? 's' : ''}`;
+            const numEl = card.querySelector('.pinned-folder-count-num');
+            const labelEl = card.querySelector('.pinned-folder-count-label');
+            if (numEl) numEl.textContent = totalCount;
+            if (labelEl) labelEl.textContent = `Item${totalCount !== 1 ? 's' : ''}`;
           }
         }
         const images = entries.filter(e => !e.isDirectory && imgExts.includes(e.extension))
-              .sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 3).map(e => e.path);
+              .sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 6).map(e => e.path);
         const old = this._pinnedFolderThumbs[f.id];
         if (!old || JSON.stringify(old) !== JSON.stringify(images)) {
           this._pinnedFolderThumbs[f.id] = images;
@@ -941,14 +965,24 @@ const App = {
         if (!f.path || !this._pinnedFolderThumbs[f.id]?.length) continue;
         const card = document.querySelector(`.pinned-folder-card[data-folder-id="${f.id}"]`);
         if (!card) continue;
-        const papersEl = card.querySelector('.pinned-folder-papers');
-        if (!papersEl) continue;
+        const topPapersEl = card.querySelector('.pinned-folder-papers');
+        const bottomPapersEl = card.querySelector('.pinned-folder-papers-bottom');
+        if (!topPapersEl || !bottomPapersEl) continue;
         const folderClips = this.allClips.filter(c => c.folderId === f.id);
         const hasClipImages = folderClips.some(c => c.type === 'image' && c.filePath);
         if (hasClipImages) continue; // clip images take priority
-        papersEl.innerHTML = this._pinnedFolderThumbs[f.id].map(p =>
+        const allThumbs = this._pinnedFolderThumbs[f.id];
+        const makePaperHtml = (imgs) => imgs.map(p =>
           `<div class="folder-paper"><img src="file://${p.replace(/\\/g, '/')}" /></div>`
         ).join('');
+        // Bottom row fills first (like a real folder)
+        if (allThumbs.length <= 3) {
+          bottomPapersEl.innerHTML = makePaperHtml(allThumbs);
+          topPapersEl.innerHTML = '';
+        } else {
+          bottomPapersEl.innerHTML = makePaperHtml(allThumbs.slice(0, 3));
+          topPapersEl.innerHTML = makePaperHtml(allThumbs.slice(3));
+        }
       }
     }
   },
@@ -974,52 +1008,76 @@ const App = {
     }
   },
 
+  _updateExplorerFades() {
+    const list = document.getElementById('explorerFileList');
+    const ft = document.getElementById('explorerFadeTop');
+    const fb = document.getElementById('explorerFadeBottom');
+    if (!list || !ft || !fb) return;
+    ft.classList.toggle('visible', list.scrollTop > 4);
+    fb.classList.toggle('visible', list.scrollTop < list.scrollHeight - list.clientHeight - 4);
+  },
+
   _renderPinnedCard(container, folder) {
     const card = document.createElement('div');
     card.className = 'pinned-folder-card';
     card.dataset.folderId = folder.id;
     const color = folder.color || '#4cd964';
 
-    // Get ALL folder clips (not just 3)
+    // Get ALL folder clips
     const folderClips = this.allClips.filter(c => c.folderId === folder.id);
     // For filesystem-backed folders, use cached filesystem count if available
     const count = (folder.path && this._pinnedFolderCounts && this._pinnedFolderCounts[folder.id] !== undefined)
       ? this._pinnedFolderCounts[folder.id]
       : folderClips.length;
 
-    // Papers behind the folder (recent clip thumbnails peeking out)
-    let papersHtml = '';
-    const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 3);
+    // Collect up to 6 thumbnails for papers (bottom row fills first like a real folder)
+    let thumbImages = [];
+    const paperClips = folderClips.filter(c => c.type === 'image' && c.filePath).slice(0, 6);
     if (paperClips.length > 0) {
-      paperClips.forEach(c => {
-        papersHtml += `<div class="folder-paper"><img src="file://${c.filePath.replace(/\\/g, '/')}" /></div>`;
-      });
-    } else if (count > 0 && folder.path && this._pinnedFolderThumbs && this._pinnedFolderThumbs[folder.id] && this._pinnedFolderThumbs[folder.id].length > 0) {
-      this._pinnedFolderThumbs[folder.id].forEach(p => {
-        papersHtml += `<div class="folder-paper"><img src="file://${p.replace(/\\/g, '/')}" /></div>`;
-      });
-    } else if (count > 0) {
-      papersHtml = '<div class="folder-paper"><div class="folder-paper-text">TXT</div></div>';
+      thumbImages = paperClips.map(c => `file://${c.filePath.replace(/\\/g, '/')}`);
+    } else if (folder.path && this._pinnedFolderThumbs && this._pinnedFolderThumbs[folder.id] && this._pinnedFolderThumbs[folder.id].length > 0) {
+      thumbImages = this._pinnedFolderThumbs[folder.id].slice(0, 6).map(p => `file://${p.replace(/\\/g, '/')}`);
     }
 
-    // Folder SVG icon with color fill, name overlaid
+    // Bottom row populates first (like stacking papers in a real folder)
+    // 1-3 items → bottom row only; 4-6 items → bottom row (first 3) + top row (next 3)
+    const makePaperHtml = (imgs) => imgs.map(src => `<div class="folder-paper"><img src="${src}" /></div>`).join('');
+    let topPapersHtml = '';
+    let bottomPapersHtml = '';
+    if (thumbImages.length > 0) {
+      if (thumbImages.length <= 3) {
+        bottomPapersHtml = makePaperHtml(thumbImages);
+      } else {
+        bottomPapersHtml = makePaperHtml(thumbImages.slice(0, 3));
+        topPapersHtml = makePaperHtml(thumbImages.slice(3));
+      }
+    } else if (count > 0) {
+      bottomPapersHtml = '<div class="folder-paper"><div class="folder-paper-text">TXT</div></div>';
+    }
+
+    // Folder SVG with semi-transparent color fill (displayed above blur) + colored stroke outline
     const folderSvg = `<svg class="folder-svg-icon" viewBox="0 0 59 47" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="${color}"/>
-      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="rgba(255,255,255,0.08)"/>
+      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="${color}" fill-opacity="0.65"/>
+      <path d="M4.375 46.6667C3.20833 46.6667 2.1875 46.217 1.3125 45.3177C0.4375 44.4184 0 43.4097 0 42.2917V4.375C0 3.25694 0.4375 2.24826 1.3125 1.34896C2.1875 0.449653 3.20833 0 4.375 0H24.8646L29.2396 4.375H53.9583C55.0764 4.375 56.0851 4.82465 56.9844 5.72396C57.8837 6.62326 58.3333 7.63194 58.3333 8.75V42.2917C58.3333 43.4097 57.8837 44.4184 56.9844 45.3177C56.0851 46.217 55.0764 46.6667 53.9583 46.6667H4.375Z" fill="none" stroke="${color}" stroke-width="1.2" stroke-opacity="0.6"/>
     </svg>`;
 
     const pathLabel = folder.path ? folder.path.replace(/\\/g, '/').split('/').slice(-2).join('/') : '';
 
+    // Set folder color as CSS variable for hover border (no inline border-color)
+    card.style.setProperty('--folder-color', `${color}50`);
+
     card.innerHTML = `
       <div class="pinned-folder-icon-wrap">
-        <div class="pinned-folder-papers">${papersHtml}</div>
+        <div class="pinned-folder-papers">${topPapersHtml}</div>
+        <div class="pinned-folder-papers-bottom">${bottomPapersHtml}</div>
         <div class="pinned-folder-svg-wrap">
+          <div class="pinned-folder-blur"></div>
           ${folderSvg}
-          <span class="pinned-folder-label">${this.escapeHtml(folder.name)}</span>
+          <span class="pinned-folder-count-overlay"><span class="pinned-folder-count-num">${count}</span><span class="pinned-folder-count-label">Item${count !== 1 ? 's' : ''}</span></span>
         </div>
       </div>
       <div class="pinned-folder-details">
-        <div class="pinned-folder-card-count">${count} item${count !== 1 ? 's' : ''}</div>
+        <div class="pinned-folder-card-name">${this.escapeHtml(folder.name)}</div>
         ${pathLabel ? `<div class="pinned-folder-card-path" title="${this.escapeHtml(folder.path || '')}">${this.escapeHtml(pathLabel)}</div>` : ''}
       </div>
     `;
@@ -1211,7 +1269,73 @@ const App = {
     this.currentViewLabel = label;
     this.showSortBar(label);
     this.applySortAndRender();
+    // Show quick filter buttons for folder tabs and All Clips
+    this._renderQuickFilters();
     this.renderLibraryTabs();
+    this.renderClipGrid();
+  },
+
+  _tabQuickFilters: {},  // tabId -> Set of active filter keys
+
+  _renderQuickFilters() {
+    const container = document.getElementById('libQuickFilters');
+    if (!container) return;
+    container.innerHTML = '';
+    const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+    if (!activeTab) return;
+
+    // Get or create the filter set for this tab
+    if (!this._tabQuickFilters[activeTab.id]) {
+      this._tabQuickFilters[activeTab.id] = new Set();
+    }
+    const tabFilters = this._tabQuickFilters[activeTab.id];
+
+    const filterTypes = [
+      { key: 'image', label: 'Images', icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>' },
+      { key: 'text', label: 'Text', icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
+      { key: 'link', label: 'Links', icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' },
+      { key: 'code', label: 'Code', icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>' },
+      { key: 'favorite', label: 'Favorites', icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' }
+    ];
+
+    filterTypes.forEach(ft => {
+      const btn = document.createElement('button');
+      btn.className = 'quick-filter-btn' + (tabFilters.has(ft.key) ? ' active' : '');
+      btn.innerHTML = `${ft.icon}<span>${ft.label}</span>`;
+      btn.addEventListener('click', () => {
+        if (tabFilters.has(ft.key)) {
+          tabFilters.delete(ft.key);
+        } else {
+          tabFilters.add(ft.key);
+        }
+        this._applyQuickFilters();
+        this._renderQuickFilters();
+      });
+      container.appendChild(btn);
+    });
+  },
+
+  _applyQuickFilters() {
+    const activeTab = this.libraryTabs.find(t => t.id === this.activeLibTab);
+    if (!activeTab) return;
+    const tabFilters = this._tabQuickFilters[activeTab.id];
+    if (!tabFilters || tabFilters.size === 0) {
+      // No filters active — re-apply the current tab/view to reset
+      this._applyLibTabFilter(activeTab);
+      return;
+    }
+    // First re-populate this.clips with the full tab data (unfiltered)
+    // We do this by calling _applyLibTabFilter but prevent recursion
+    this._skipQuickFilterRender = true;
+    this._applyLibTabFilter(activeTab);
+    this._skipQuickFilterRender = false;
+    // Now filter this.clips by the selected types
+    this.clips = this.clips.filter(c => {
+      if (tabFilters.has(c.type)) return true;
+      if (tabFilters.has('favorite') && c.favorite) return true;
+      return false;
+    });
+    this.renderClipGrid();
   },
 
   renderLibraryTabs() {
@@ -1401,6 +1525,19 @@ const App = {
     this.currentViewLabel = label;
     this.showSortBar(label);
     this.applySortAndRender();
+    if (!this._skipQuickFilterRender) {
+      this._renderQuickFilters();
+      // Re-apply any saved quick filters for this tab
+      const tabFilters = this._tabQuickFilters[tab.id];
+      if (tabFilters && tabFilters.size > 0) {
+        this.clips = this.clips.filter(c => {
+          if (tabFilters.has(c.type)) return true;
+          if (tabFilters.has('favorite') && c.favorite) return true;
+          return false;
+        });
+        this.renderClipGrid();
+      }
+    }
     this.renderLibraryTabs();
   },
 
@@ -1548,7 +1685,7 @@ const App = {
           ${thumbHtml}
         </div>
         <div class="recent-clip-info">
-          <div class="rc-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 32))}</div>
+          <div class="rc-title">${this.escapeHtml(this.midTruncate(this.getClipDisplayName(clip), 32))}</div>
           <div class="rc-meta">${this.formatTime(clip.createdAt)}</div>
         </div>
         <button class="recent-clip-delete" data-clip-id="${clip.id}" title="Delete">
@@ -1769,12 +1906,20 @@ const App = {
       card.draggable = true;
 
       let thumbContent = '';
+      // Type badge icons for clip cards (same as explorer)
+      const typeIcons = {
+        'image': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4cd964" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+        'text': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5ac8fa" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+        'link': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9f0a" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>',
+        'code': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#bf5af2" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+      };
+      const typeBadge = typeIcons[clip.type] ? `<span class="file-thumb-badge">${typeIcons[clip.type]}</span>` : '';
       if (clip.type === 'image' && clip.filePath) {
-        thumbContent = `<img src="file://${clip.filePath.replace(/\\/g, '/')}" alt="" loading="lazy" />`;
+        thumbContent = `${typeBadge}<img src="file://${clip.filePath.replace(/\\/g, '/')}" alt="" loading="lazy" />`;
       } else if (clip.type === 'link') {
-        thumbContent = `<div class="link-preview">${this.escapeHtml(clip.content || clip.title || '')}</div>`;
+        thumbContent = `${typeBadge}<div class="link-preview">${this.escapeHtml(clip.content || clip.title || '')}</div>`;
       } else {
-        thumbContent = `<div class="text-preview">${this.escapeHtml(clip.content || clip.title || '')}</div>`;
+        thumbContent = `${typeBadge}<div class="text-preview">${this.escapeHtml(clip.content || clip.title || '')}</div>`;
       }
 
       const time = this.formatTime(clip.createdAt);
@@ -1791,7 +1936,7 @@ const App = {
       card.innerHTML = `
         <div class="clip-card-thumb">${thumbContent}</div>
         <div class="clip-card-info">
-          <div class="clip-card-title">${this.escapeHtml(this.midTruncate(clip.title || 'Untitled', 60))}</div>
+          <div class="clip-card-title">${this.escapeHtml(this.midTruncate(this.getClipDisplayName(clip), 60))}</div>
           <div class="clip-card-meta"><span>${time}</span><span>${size}</span></div>
         </div>
         ${overlayBtn}
@@ -1836,8 +1981,6 @@ const App = {
           this.selectMode = true;
           this.selectedClips.add(clip.id);
           this._lastClickedClipId = clip.id;
-          const sortBtn = document.getElementById('selectModeBtnSort');
-          if (sortBtn) sortBtn.classList.add('active');
           this.renderClipGrid();
           this.updateBulkUI();
           return;
@@ -2256,7 +2399,15 @@ const App = {
     if (!tabList || !fl || !fr) return;
     if (tabList._fadeHandler) tabList.removeEventListener('scroll', tabList._fadeHandler);
     const update = () => {
-      fl.classList.toggle('visible', tabList.scrollLeft > 4);
+      const canScrollLeft = tabList.scrollLeft > 4;
+      fl.classList.toggle('visible', canScrollLeft);
+      // Position left fade at the start of the tabs scroll area
+      if (canScrollLeft) {
+        const header = tabList.parentElement;
+        const tabsRect = tabList.getBoundingClientRect();
+        const headerRect = header.getBoundingClientRect();
+        fl.style.left = (tabsRect.left - headerRect.left) + 'px';
+      }
       const canScrollRight = tabList.scrollLeft < tabList.scrollWidth - tabList.clientWidth - 4;
       fr.classList.toggle('visible', canScrollRight);
       // Position right fade at the right edge of tabs container
@@ -2593,7 +2744,14 @@ const App = {
       if (mode === 'type') return (a.extension || '').localeCompare(b.extension || '');
       return 0;
     };
-    dirs.sort(sorter);
+    // Within dirs, pinned folders always come first regardless of sort mode
+    const pinnedPaths = new Set(this.folders.filter(f => f.pinned && f.path).map(f => f.path.replace(/\\/g, '/')));
+    dirs.sort((a, b) => {
+      const aPinned = pinnedPaths.has(a.path.replace(/\\/g, '/'));
+      const bPinned = pinnedPaths.has(b.path.replace(/\\/g, '/'));
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      return sorter(a, b);
+    });
     files.sort(sorter);
     return [...dirs, ...files];
   },
@@ -2629,7 +2787,7 @@ const App = {
     const imgExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
     const textExts = ['.txt', '.md', '.json', '.js', '.ts', '.html', '.css', '.xml', '.csv', '.log', '.py', '.java', '.c', '.cpp', '.h'];
     const showThumbs = this._explorerThumbMode > 0;
-    const gridNameLen = this._explorerThumbMode === 2 ? 48 : 30;
+    const gridNameLen = this._explorerThumbMode === 2 ? 48 : 18;
 
     sorted.forEach((entry, idx) => {
       const item = document.createElement('div');
@@ -2971,6 +3129,9 @@ const App = {
 
     // Rubber-band (drag-to-select) on empty area
     this._bindExplorerRubberBand(container, sorted);
+
+    // Update scroll fades
+    requestAnimationFrame(() => this._updateExplorerFades());
   },
 
   // -- Explorer selection helpers --
@@ -3496,6 +3657,7 @@ const App = {
       await ucb.moveClipToFolder(action.clipId, action.oldFolderId);
       await this.loadData();
       this.renderPinnedFolders();
+      await this._refreshActiveFolderTab();
       this.refreshExplorer();
     } else if (action.type === 'bulkMove') {
       for (const e of action.entries) {
@@ -3503,6 +3665,7 @@ const App = {
       }
       await this.loadData();
       this.renderPinnedFolders();
+      await this._refreshActiveFolderTab();
       this.refreshExplorer();
     } else if (action.type === 'delete') {
       // Restore the soft-deleted clip back into the database
@@ -3580,6 +3743,7 @@ const App = {
       await ucb.moveClipToFolder(action.clipId, action.newFolderId);
       await this.loadData();
       this.renderPinnedFolders();
+      await this._refreshActiveFolderTab();
       this.refreshExplorer();
     } else if (action.type === 'bulkMove') {
       for (const e of action.entries) {
@@ -3587,6 +3751,7 @@ const App = {
       }
       await this.loadData();
       this.renderPinnedFolders();
+      await this._refreshActiveFolderTab();
       this.refreshExplorer();
     } else if (action.type === 'delete') {
       // Redo delete: soft-delete again
@@ -4257,16 +4422,16 @@ const App = {
           if (parentDir) this.navigateExplorer(parentDir, clip.filePath);
         } else { this.toast('No file path available', 'info'); }
       }},
-      { label: 'Browse in Library', action: () => {
-        if (clip.filePath) {
-          const parentDir = clip.filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-          const folderName = parentDir.split('/').pop() || 'Folder';
-          if (parentDir) this.openFolderInLibrary(parentDir, folderName, clip.filePath);
-        } else { this.toast('No file path available', 'info'); }
-      }},
       { label: clip.favorite ? 'Unfavorite' : 'Favorite', action: () => this.toggleFavoriteById(clip.id) },
       'separator',
-      { label: 'Move to Folder', action: () => Dialogs.showMoveFolderDialog(clip, this.folders.filter(f => f.pinned)) },
+      { label: 'Move to Folder', action: () => {
+        // If in select mode with multiple selected, move ALL selected clips
+        if (this.selectMode && this.selectedClips.size > 1) {
+          this.bulkMoveToFolder();
+        } else {
+          Dialogs.showMoveFolderDialog(clip, this.folders.filter(f => f.pinned));
+        }
+      }},
       { label: 'Move to Hidden', action: () => Dialogs.showMoveToHiddenDialog(clip) },
       { label: 'QR Code', action: () => { this.activeClip = clip; this.showQrCode(); } },
       { label: 'Generate Link', action: () => { this.activeClip = clip; this.generateShareLink(); } },
@@ -4617,6 +4782,16 @@ const App = {
 
   escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; },
 
+  // Get display name for a clip — prefer actual filename over title
+  getClipDisplayName(clip) {
+    if (clip.filePath) {
+      const parts = clip.filePath.replace(/\\/g, '/').split('/');
+      const fileName = parts[parts.length - 1];
+      if (fileName) return fileName;
+    }
+    return clip.title || 'Untitled';
+  },
+
   midTruncate(str, maxLen = 28) {
     if (!str || str.length <= maxLen) return str;
     // Always preserve the file extension if present
@@ -4626,6 +4801,12 @@ const App = {
       const stem = str.substring(0, dotIdx);
       const availForStem = maxLen - ext.length - 1; // -1 for ellipsis
       if (availForStem > 3) {
+        // True middle truncation: keep start AND end of stem
+        const startLen = Math.ceil(availForStem / 2);
+        const endLen = availForStem - startLen;
+        if (endLen > 0) {
+          return stem.substring(0, startLen) + '…' + stem.substring(stem.length - endLen) + ext;
+        }
         return stem.substring(0, availForStem) + '…' + ext;
       }
     }
@@ -4642,7 +4823,10 @@ const App = {
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-    return new Date(timestamp).toLocaleDateString();
+    return new Date(timestamp).toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    });
   },
 
   formatSize(bytes) {
